@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>MoveNet 팔굽혀펴기 카운터 (정확도 강화)</title>
+
+  <style>
+    body {
+      text-align: center;
+      font-family: Arial, sans-serif;
+    }
+
+    #wrap {
+      position: relative;
+      display: inline-block;
+      margin-top: 10px;
+    }
+
+    #video,
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    #canvas {
+      z-index: 10;
+    }
+
+    #count {
+      font-size: 32px;
+      margin-top: 20px;
+      font-weight: bold;
+    }
+
+    #debug {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #555;
+      white-space: pre-line;
+    }
+
+    #controls {
+      margin-top: 12px;
+    }
+
+    button {
+      margin: 0 4px;
+      padding: 6px 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>MoveNet Push-Up Counter</h1>
+  <p id="status">모델 준비 중...</p>
+
+  <div id="wrap">
+    <video
+      id="video"
+      width="640"
+      height="480"
+      autoplay
+      playsinline
+    ></video>
+    <canvas id="canvas" width="640" height="480"></canvas>
+  </div>
+
+  <div id="count">0 회</div>
+
+  <div id="controls">
+    <button id="btnUp">위 자세 저장</button>
+    <button id="btnDown">아래 자세 저장</button>
+  </div>
+  <p id="calibInfo">옆으로 돌아서 팔굽혀펴기 시작 자세(팔 편 상태)에서 "위 자세 저장",  
+내려간 상태에서 "아래 자세 저장"을 한 번씩 눌러주면 더 정확해져요.</p>
+
+  <p id="debug">-</p>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0"></script>
+  <!-- Pose Detection + TFLite (MoveNet) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite"></script>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+    const countEl = document.getElementById("count");
+    const debugEl = document.getElementById("debug");
+    const btnUp = document.getElementById("btnUp");
+    const btnDown = document.getElementById("btnDown");
+    const calibInfo = document.getElementById("calibInfo");
+
+    let detector;
+    let count = 0;
+    let state = "up";  // up → down → up
+    let lastAngle = null;
+
+    // 캘리브레이션용
+    let calibUp = null;
+    let calibDown = null;
+
+    // 기본 기준값(캘리브레이션 안 했을 때 사용)
+    let DOWN_THRESHOLD = 115;  // 이 각도보다 작으면 내려간 상태
+    let UP_THRESHOLD   = 145;  // 이 각도보다 크면 올라간 상태
+
+    // 연속 프레임 수 조건 (노이즈 제거용)
+    let framesDown = 0;
+    let framesUp = 0;
+
+    function updateThresholdText() {
+      calibInfo.textContent =
+        `현재 기준: DOWN ≤ ${DOWN_THRESHOLD.toFixed(0)}°, UP ≥ ${UP_THRESHOLD.toFixed(0)}°
+(원하면 "위/아래 자세 저장" 버튼으로 내 몸 기준으로 다시 맞출 수 있어요.)`;
+    }
+
+    function applyCalibration() {
+      if (calibUp != null && calibDown != null) {
+        if (calibDown < calibUp - 10) {
+          // 약간 여유를 두고 기준 설정
+          DOWN_THRESHOLD = calibDown + 5;
+          UP_THRESHOLD = calibUp - 5;
+          updateThresholdText();
+        } else {
+          calibInfo.textContent =
+            "캘리브레이션 값이 이상합니다. 위/아래 자세를 다시 저장해 주세요.";
+        }
+      } else {
+        updateThresholdText();
+      }
+    }
+
+    // -----------------------------
+    // 1. 웹캠 설정 (+에러 표시)
+    // -----------------------------
+    async function setupCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+          audio: false,
+        });
+        video.srcObject = stream;
+
+        return new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            video.play();
+            resolve();
+          };
+        });
+      } catch (err) {
+        console.error("카메라 에러:", err);
+        statusEl.textContent = `카메라 오류: ${err.name} - ${err.message}`;
+      }
+    }
+
+    // -----------------------------
+    // 2. 관절 점 그리기
+    // -----------------------------
+    function drawKeypoints(kp) {
+      kp.forEach((p) => {
+        if (p.score < 0.5) return;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = "red";
+        ctx.fill();
+      });
+    }
+
+    // -----------------------------
+    // 3. 스켈레톤(뼈대) 그리기
+    // -----------------------------
+    const edges = poseDetection.util.getAdjacentPairs(
+      poseDetection.SupportedModels.MoveNet
+    );
+
+    function drawSkeleton(kp) {
+      edges.forEach(([i, j]) => {
+        const p1 = kp[i];
+        const p2 = kp[j];
+        if (!p1 || !p2) return;
+        if (p1.score < 0.5 || p2.score < 0.5) return;
+
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = "lime";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      });
+    }
+
+    // -----------------------------
+    // 4. 각도 계산 (안정 버전)
+    // -----------------------------
+    function angle(a, b, c) {
+      const ab = { x: a.x - b.x, y: a.y - b.y };
+      const cb = { x: c.x - b.x, y: c.y - b.y };
+
+      const dot = ab.x * cb.x + ab.y * cb.y;
+      const abLen = Math.hypot(ab.x, ab.y);
+      const cbLen = Math.hypot(cb.x, cb.y);
+
+      if (abLen === 0 || cbLen === 0) return 180;
+
+      let cos = dot / (abLen * cbLen);
+      cos = Math.min(1, Math.max(-1, cos));
+
+      return Math.acos(cos) * (180 / Math.PI);
+    }
+
+    // -----------------------------
+    // 5. 팔굽혀펴기 카운터
+    // -----------------------------
+    function pushUpCounter(kp) {
+      // MoveNet 인덱스:
+      // 5: left shoulder, 7: left elbow, 9: left wrist
+      // 6: right shoulder, 8: right elbow, 10: right wrist
+
+      const leftShoulder  = kp[5];
+      const leftElbow     = kp[7];
+      const leftWrist     = kp[9];
+      const rightShoulder = kp[6];
+      const rightElbow    = kp[8];
+      const rightWrist    = kp[10];
+
+      const leftScore =
+        (leftShoulder?.score || 0) +
+        (leftElbow?.score || 0) +
+        (leftWrist?.score || 0);
+      const rightScore =
+        (rightShoulder?.score || 0) +
+        (rightElbow?.score || 0) +
+        (rightWrist?.score || 0);
+
+      let shoulder, elbow, wrist;
+
+      if (leftScore >= rightScore) {
+        shoulder = leftShoulder;
+        elbow = leftElbow;
+        wrist = leftWrist;
+      } else {
+        shoulder = rightShoulder;
+        elbow = rightElbow;
+        wrist = rightWrist;
+      }
+
+      if (
+        !shoulder ||
+        !elbow ||
+        !wrist ||
+        shoulder.score < 0.5 ||
+        elbow.score < 0.5 ||
+        wrist.score < 0.5
+      ) {
+        debugEl.textContent = "팔 인식 불안정 (화면에 팔이 잘 보이게 옆으로 서 보세요)";
+        return;
+      }
+
+      const currentAngle = angle(
+        { x: shoulder.x, y: shoulder.y },
+        { x: elbow.x,    y: elbow.y },
+        { x: wrist.x,    y: wrist.y }
+      );
+
+      lastAngle = currentAngle;
+
+      // 프레임 누적용 (노이즈 제거)
+      if (currentAngle < DOWN_THRESHOLD) {
+        framesDown++;
+      } else {
+        framesDown = 0;
+      }
+
+      if (currentAngle > UP_THRESHOLD) {
+        framesUp++;
+      } else {
+        framesUp = 0;
+      }
+
+      debugEl.textContent =
+        `현재 팔꿈치 각도: ${currentAngle.toFixed(0)}°
+DOWN 기준: ≤ ${DOWN_THRESHOLD.toFixed(0)}°,  UP 기준: ≥ ${UP_THRESHOLD.toFixed(0)}°
+상태: ${state},  down프레임: ${framesDown}, up프레임: ${framesUp}`;
+
+      // 연속 몇 프레임 이상이어야 상태 전환 (여기선 3프레임)
+      const NEED_FRAMES = 3;
+
+      // up → down
+      if (framesDown >= NEED_FRAMES && state === "up") {
+        state = "down";
+        // down으로 바뀔 때 up프레임 초기화
+        framesUp = 0;
+      }
+
+      // down → up → 1회 카운트
+      if (framesUp >= NEED_FRAMES && state === "down") {
+        state = "up";
+        framesDown = 0;
+        count++;
+        countEl.textContent = `${count} 회`;
+      }
+    }
+
+    // -----------------------------
+    // 6. 메인 함수
+    // -----------------------------
+    async function main() {
+      statusEl.textContent = "카메라 준비 중...";
+      await setupCamera();
+
+      if (!video.srcObject) return;
+
+      statusEl.textContent = "MoveNet 로딩 중...";
+      detector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+          modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+        }
+      );
+
+      statusEl.textContent =
+        "시작! 카메라는 옆에서 찍히게 두고, 팔굽혀펴기 해보세요.";
+
+      updateThresholdText();
+
+      async function render() {
+        const poses = await detector.estimatePoses(video);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (poses.length > 0) {
+          const kp = poses[0].keypoints;
+          drawKeypoints(kp);
+          drawSkeleton(kp);
+          pushUpCounter(kp);
+        }
+
+        requestAnimationFrame(render);
+      }
+
+      render();
+    }
+
+    // -----------------------------
+    // 7. 버튼(위/아래 자세 캘리브레이션)
+    // -----------------------------
+    btnUp.addEventListener("click", () => {
+      if (lastAngle != null) {
+        calibUp = lastAngle;
+        calibInfo.textContent = `위 자세 각도 저장: ${calibUp.toFixed(0)}° (이제 아래 자세에서 버튼 누르세요)`;
+        applyCalibration();
+      } else {
+        calibInfo.textContent = "위 자세 저장 실패: 사람이 화면에 잘 보이도록 서주세요.";
+      }
+    });
+
+    btnDown.addEventListener("click", () => {
+      if (lastAngle != null) {
+        calibDown = lastAngle;
+        calibInfo.textContent = `아래 자세 각도 저장: ${calibDown.toFixed(0)}°`;
+        applyCalibration();
+      } else {
+        calibInfo.textContent = "아래 자세 저장 실패: 사람이 화면에 잘 보이도록 서주세요.";
+      }
+    });
+
+    main();
+  </script>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Squat Mode</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        background: transparent;
+      }
+      #title {
+        color: #ffffff;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        margin-top: 6px;
+      }
+      #info {
+        color: #ffffff;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        margin: 4px 0;
+      }
+      #counterBox {
+        color: #ffffff;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 600;
+        margin: 6px 0 10px 0;
+      }
+      #output {
+        width: 100%;
+        height: auto;
+        max-height: 100%;
+        border-radius: 18px;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="title">스쿼트 모드 (Squat)</div>
+      <div id="info">
+        서 있는 자세에서 앉았다가 다시 일어날 때마다 카운트합니다.
+      </div>
+      <div id="counterBox">
+        스쿼트 카운트 : <span id="count">0</span> 회
+      </div>
+      <canvas id="output"></canvas>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+
+    <script>
+      const KP = {
+        left_hip: 11,
+        right_hip: 12,
+        left_knee: 13,
+        right_knee: 14,
+        left_ankle: 15,
+        right_ankle: 16,
+      };
+
+      function getPoint(name, kps) {
+        const pt = kps[KP[name]];
+        if (!pt || pt.score < 0.3) return null;
+        return pt;
+      }
+
+      function avg(p1, p2) {
+        return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      }
+
+      function angleDeg(a, b, c) {
+        const abx = a.x - b.x;
+        const aby = a.y - b.y;
+        const cbx = c.x - b.x;
+        const cby = c.y - b.y;
+        const dot = abx * cbx + aby * cby;
+        const ab = Math.sqrt(abx * abx + aby * aby);
+        const cb = Math.sqrt(cbx * cbx + cby * cby);
+        if (ab === 0 || cb === 0) return 180;
+        const cos = dot / (ab * cb);
+        const clamped = Math.min(1, Math.max(-1, cos));
+        return (Math.acos(clamped) * 180) / Math.PI;
+      }
+
+      let detector,
+        video,
+        canvas,
+        ctx,
+        running = false;
+      let count = 0;
+      let phase = "up"; // up(서있음) -> down(앉음) -> up
+
+      const countSpan = document.getElementById("count");
+
+      function updateCount() {
+        countSpan.textContent = count.toString();
+      }
+
+      function analyzeSquat(keypoints) {
+        const lHip = getPoint("left_hip", keypoints);
+        const rHip = getPoint("right_hip", keypoints);
+        const lKnee = getPoint("left_knee", keypoints);
+        const rKnee = getPoint("right_knee", keypoints);
+        const lAnkle = getPoint("left_ankle", keypoints);
+        const rAnkle = getPoint("right_ankle", keypoints);
+
+        if (!lHip || !rHip || !lKnee || !rKnee || !lAnkle || !rAnkle) return;
+
+        const hip = avg(lHip, rHip);
+        const knee = avg(lKnee, rKnee);
+        const ankle = avg(lAnkle, rAnkle);
+
+        // 무릎 각도
+        const ang = angleDeg(hip, knee, ankle);
+
+        // 앉았을 때 (각도 작음)
+        if (phase === "up" && ang < 100) {
+          phase = "down";
+        }
+        // 다시 일어섰을 때
+        else if (phase === "down" && ang > 160) {
+          phase = "up";
+          count += 1;
+          updateCount();
+        }
+      }
+
+      function drawKeypoints(keypoints) {
+        ctx.fillStyle = "rgba(255,0,255,0.8)";
+        keypoints.forEach((kp) => {
+          if (kp.score < 0.3) return;
+          ctx.beginPath();
+          ctx.arc(kp.x, kp.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      async function createDetector() {
+        if (detector) return;
+        await tf.ready();
+        await tf.setBackend("webgl");
+        detector = await poseDetection.createDetector(
+          poseDetection.SupportedModels.MoveNet,
+          {
+            modelType:
+              poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+          }
+        );
+      }
+
+      async function setupCamera() {
+        if (video) return;
+        video = document.createElement("video");
+        video.autoplay = true;
+        video.playsInline = true;
+        video.muted = true;
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 360 },
+          audio: false,
+        });
+        video.srcObject = stream;
+
+        await new Promise((res) => {
+          video.onloadedmetadata = () => {
+            video.play();
+            res();
+          };
+        });
+
+        canvas = document.getElementById("output");
+        ctx = canvas.getContext("2d");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+
+      async function renderLoop() {
+        if (!running) return;
+        const poses = await detector.estimatePoses(video);
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        if (poses && poses.length > 0 && poses[0].keypoints) {
+          const kps = poses[0].keypoints;
+          analyzeSquat(kps);
+          drawKeypoints(kps);
+        }
+
+        ctx.restore();
+        requestAnimationFrame(renderLoop);
+      }
+
+      window.startCamera = async function () {
+        if (running) return;
+        await createDetector();
+        await setupCamera();
+        running = true;
+        renderLoop();
+      };
+    </script>
+  </body>
+</html>

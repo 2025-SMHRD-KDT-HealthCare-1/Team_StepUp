@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Plank Mode</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        background: transparent;
+      }
+      #title {
+        color: #ffffff;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        margin-top: 6px;
+      }
+      #info {
+        color: #ffffff;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        margin: 4px 0;
+      }
+      #timerBox {
+        color: #ffffff;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 600;
+        margin: 6px 0 10px 0;
+      }
+      #output {
+        width: 100%;
+        height: auto;
+        max-height: 100%;
+        border-radius: 18px;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="title">플랭크 모드 (Plank)</div>
+      <div id="info">
+        어깨–골반–발목이 일직선이 되게 맞추면 “좋은 자세”로 인식합니다.
+      </div>
+      <div id="timerBox">
+        좋은 자세 유지 시간 : <span id="time">0.0</span> 초
+      </div>
+      <canvas id="output"></canvas>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+
+    <script>
+      const KP = {
+        left_shoulder: 5,
+        right_shoulder: 6,
+        left_hip: 11,
+        right_hip: 12,
+        left_ankle: 15,
+        right_ankle: 16,
+      };
+
+      function getPoint(name, kps) {
+        const pt = kps[KP[name]];
+        if (!pt || pt.score < 0.3) return null;
+        return pt;
+      }
+
+      function avg(p1, p2) {
+        return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      }
+
+      function angleDeg(a, b, c) {
+        const abx = a.x - b.x;
+        const aby = a.y - b.y;
+        const cbx = c.x - b.x;
+        const cby = c.y - b.y;
+        const dot = abx * cbx + aby * cby;
+        const ab = Math.sqrt(abx * abx + aby * aby);
+        const cb = Math.sqrt(cbx * cbx + cby * cby);
+        if (ab === 0 || cb === 0) return 180;
+        const cos = dot / (ab * cb);
+        const clamped = Math.min(1, Math.max(-1, cos));
+        return (Math.acos(clamped) * 180) / Math.PI;
+      }
+
+      let detector,
+        video,
+        canvas,
+        ctx,
+        running = false;
+
+      let holding = false;
+      let startTime = 0;
+      let lastGoodTime = 0;
+
+      const timeSpan = document.getElementById("time");
+
+      function updateTimeDisplay(sec) {
+        timeSpan.textContent = sec.toFixed(1);
+      }
+
+      function analyzePlank(keypoints) {
+        const lShoulder = getPoint("left_shoulder", keypoints);
+        const rShoulder = getPoint("right_shoulder", keypoints);
+        const lHip = getPoint("left_hip", keypoints);
+        const rHip = getPoint("right_hip", keypoints);
+        const lAnkle = getPoint("left_ankle", keypoints);
+        const rAnkle = getPoint("right_ankle", keypoints);
+
+        if (!lShoulder || !rShoulder || !lHip || !rHip || !lAnkle || !rAnkle)
+          return;
+
+        const shoulder = avg(lShoulder, rShoulder);
+        const hip = avg(lHip, rHip);
+        const ankle = avg(lAnkle, rAnkle);
+
+        const ang = angleDeg(shoulder, hip, ankle); // 180도에 가까울수록 일직선
+        const isGood = ang > 165; // 임계값
+
+        if (isGood) {
+          if (!holding) {
+            holding = true;
+            startTime = performance.now();
+          }
+          lastGoodTime = performance.now();
+          const sec = (lastGoodTime - startTime) / 1000;
+          updateTimeDisplay(sec);
+        } else {
+          holding = false;
+        }
+      }
+
+      function drawKeypoints(keypoints) {
+        ctx.fillStyle = "rgba(0,255,255,0.8)";
+        keypoints.forEach((kp) => {
+          if (kp.score < 0.3) return;
+          ctx.beginPath();
+          ctx.arc(kp.x, kp.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      async function createDetector() {
+        if (detector) return;
+        await tf.ready();
+        await tf.setBackend("webgl");
+        detector = await poseDetection.createDetector(
+          poseDetection.SupportedModels.MoveNet,
+          {
+            modelType:
+              poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+          }
+        );
+      }
+
+      async function setupCamera() {
+        if (video) return;
+        video = document.createElement("video");
+        video.autoplay = true;
+        video.playsInline = true;
+        video.muted = true;
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 360 },
+          audio: false,
+        });
+        video.srcObject = stream;
+
+        await new Promise((res) => {
+          video.onloadedmetadata = () => {
+            video.play();
+            res();
+          };
+        });
+
+        canvas = document.getElementById("output");
+        ctx = canvas.getContext("2d");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+
+      async function renderLoop() {
+        if (!running) return;
+        const poses = await detector.estimatePoses(video);
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        if (poses && poses.length > 0 && poses[0].keypoints) {
+          const kps = poses[0].keypoints;
+          analyzePlank(kps);
+          drawKeypoints(kps);
+        }
+
+        ctx.restore();
+        requestAnimationFrame(renderLoop);
+      }
+
+      window.startCamera = async function () {
+        if (running) return;
+        await createDetector();
+        await setupCamera();
+        running = true;
+        renderLoop();
+      };
+    </script>
+  </body>
+</html>
