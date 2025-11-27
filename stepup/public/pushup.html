@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>StepUp Pushup Pose</title>
+    <style>
+      body {
+        margin: 0;
+        background: #000;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+        color: #fff;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+      #container {
+        position: relative;
+        width: 800px;
+        max-width: 100%;
+        aspect-ratio: 16 / 9;
+      }
+      video,
+      canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        /* transform: scaleX(-1); 셀카처럼 거울 모드 (현재 해제 상태 유지) */
+      }
+      #overlayUi {
+        position: absolute;
+        left: 16px;
+        top: 16px;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .pill {
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.6);
+        font-size: 12px;
+      }
+    </style>
+
+    <!-- MediaPipe Pose + Camera Utils CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.js"></script>
+  </head>
+  <body>
+    <div id="container">
+      <video id="video" playsinline></video>
+      <canvas id="canvas"></canvas>
+
+      <div id="overlayUi">
+        <div class="pill" id="modeInfo">푸쉬업 모드 · MediaPipe Pose</div>
+        <div class="pill" id="setInfo">세트: 1세트 진행 중 (10회 목표)</div>
+        <div class="pill" id="countInfo">반복 횟수: 0회</div>
+        <div class="pill" id="statusInfo">상태: 준비 중...</div>
+      </div>
+    </div>
+
+    <script>
+      const videoEl = document.getElementById("video");
+      const canvasEl = document.getElementById("canvas");
+      const ctx = canvasEl.getContext("2d");
+
+      const countInfo = document.getElementById("countInfo");
+      const statusInfo = document.getElementById("statusInfo");
+      const modeInfo = document.getElementById("modeInfo");
+      const setInfo = document.getElementById("setInfo");
+
+      let camera = null;
+
+      // 🔹 반복/세트 카운트
+      let totalRepCount = 0;
+      let repsInCurrentSet = 0;
+      let currentSetIndex = 1;
+
+      let goodRepsInSet = 0; // 깊이 충분
+      let badRepsInSet = 0; // 얕은 동작
+
+      let phase = "up"; // up -> down -> up = 1회
+      let countingEnabled = false;
+      let lastRepTime = 0;
+      let minAngleThisRep = 999;
+
+      // 🔹 가이드 / 캘리브레이션 상태
+      let calibrated = false; // 준비자세 한 번 맞췄는지
+      let readyPoseFrames = 0; // 좋은 준비자세가 연속으로 나온 프레임 수
+      let lostPoseFrames = 0; // 포즈를 잃어버린 연속 프레임 수
+
+      // 🔹 난이도/목표
+      let targetSetsPerDay = 1;
+      let targetRepsPerSet = 10;
+
+      // 🔊 실시간 코칭 쿨타임
+      let lastCoachTime = 0;
+
+      // 🔹 각도 저장
+      let lastAngles = null;
+
+      // 🔹 팔꿈치 각도(세트 기준 분석용)
+      let setElbowAngles = [];
+
+      // 🔹 세트 점수 (영상 업로드 시 같이 넘기기용)
+      let lastSetScore = null;
+
+      // 팔꿈치 기준 (푸쉬업 깊이/폭 판단용)
+      const DOWN_ELBOW_MAX = 120; // 이 이하 → 내려간 자세
+      const UP_ELBOW_MIN = 150; // 이 이상 → 올라온 자세
+
+      // "이 정도 각도면 적당"한 범위
+      const IDEAL_ELBOW_MIN = 80; // 너무 작으면 팔이 지나치게 접힘
+      const IDEAL_ELBOW_MAX = 110; // 너무 크면 팔이 덜 접힘
+
+      // 🔹 가이드라인 이미지
+      const guideImg = new Image();
+      guideImg.src = "guideline_output.png"; // pushup.html이랑 같은 폴더
+
+      function resizeCanvas() {
+        const rect = canvasEl.getBoundingClientRect();
+        canvasEl.width = rect.width;
+        canvasEl.height = rect.height;
+      }
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+
+      // 가이드라인 위치/크기
+      function getGuideRect() {
+        const w = canvasEl.width * 1.0; // 가로 100%
+        const h = canvasEl.height * 0.9; // 세로 90%
+        const x = (canvasEl.width - w) / 2;
+        const y = canvasEl.height - h - 20;
+        return { x, y, w, h };
+      }
+
+      // 세 점 a, b, c로 b 기준 각도 계산
+      function getAngle(a, b, c) {
+        const ab = { x: a.x - b.x, y: a.y - b.y };
+        const cb = { x: c.x - b.x, y: c.y - b.y };
+        const dot = ab.x * cb.x + ab.y * cb.y;
+        const magAB = Math.sqrt(ab.x * ab.x + ab.y * ab.y);
+        const magCB = Math.sqrt(cb.x * cb.x + cb.y * cb.y);
+        const cos = dot / (magAB * magCB + 1e-6);
+        const angle =
+          (Math.acos(Math.min(Math.max(cos, -1), 1)) * 180) / Math.PI;
+        return angle;
+      }
+
+      // 🔹 포즈에서 여러 각도 계산
+      function computeAllAngles(landmarks) {
+        const leftShoulder = landmarks[11];
+        const leftElbow = landmarks[13];
+        const leftWrist = landmarks[15];
+        const rightShoulder = landmarks[12];
+        const rightElbow = landmarks[14];
+        const rightWrist = landmarks[16];
+
+        const leftHip = landmarks[23];
+        const rightHip = landmarks[24];
+        const leftKnee = landmarks[25];
+        const rightKnee = landmarks[26];
+        const leftAnkle = landmarks[27];
+        const rightAnkle = landmarks[28];
+
+        // 팔꿈치 각도 (양쪽 평균)
+        const leftElbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
+        const rightElbowAngle = getAngle(rightShoulder, rightElbow, rightWrist);
+        const elbowAngle = (leftElbowAngle + rightElbowAngle) / 2;
+
+        // 엉덩이 각도: (어깨 - 엉덩이 - 무릎)
+        let hipAngle = null;
+        if (leftHip && rightHip && leftKnee && rightKnee) {
+          const leftHipAngle = getAngle(leftShoulder, leftHip, leftKnee);
+          const rightHipAngle = getAngle(rightShoulder, rightHip, rightKnee);
+          hipAngle = (leftHipAngle + rightHipAngle) / 2;
+        }
+
+        // 몸 라인 각도: (어깨 - 엉덩이 - 발목)
+        let bodyStraightAngle = null;
+        if (leftHip && rightHip && leftAnkle && rightAnkle) {
+          const leftBodyAngle = getAngle(leftShoulder, leftHip, leftAnkle);
+          const rightBodyAngle = getAngle(rightShoulder, rightHip, rightAnkle);
+          bodyStraightAngle = (leftBodyAngle + rightBodyAngle) / 2;
+        }
+
+        return {
+          elbow_angle: elbowAngle,
+          left_elbow_angle: leftElbowAngle,
+          right_elbow_angle: rightElbowAngle,
+          hip_angle: hipAngle,
+          body_straight_angle: bodyStraightAngle,
+        };
+      }
+
+      // 🔹 "푸쉬업 준비자세" 체크 (너무 빡세지 않게)
+      function checkPoseReady(landmarks) {
+        let minY = 1,
+          maxY = 0;
+        for (const lm of landmarks) {
+          if (lm.visibility !== undefined && lm.visibility < 0.1) continue;
+          if (lm.y < minY) minY = lm.y;
+          if (lm.y > maxY) maxY = lm.y;
+        }
+        const heightNorm = maxY - minY;
+
+        // 너무 멀리 있을 때 막기
+        const MIN_HEIGHT = 0.15;
+        if (heightNorm < MIN_HEIGHT) {
+          return {
+            ready: false,
+            message: "너무 멀어요. 카메라 쪽으로 조금 더 다가와 주세요.",
+          };
+        }
+
+        // 완전 서 있는 자세(카메라 꽉 찰 정도)는 막기
+        const STANDING_HEIGHT = 0.75;
+        if (heightNorm > STANDING_HEIGHT) {
+          return {
+            ready: false,
+            message:
+              "지금은 서 있는 자세에 가까워요. 몸을 더 낮춰서 푸쉬업 준비자세를 만들어 주세요.",
+          };
+        }
+
+        // 최소 관절 몇 개만 보이면 OK
+        const keyIdx = [11, 13, 15, 23, 25, 27];
+        let visibleCnt = 0;
+        for (const idx of keyIdx) {
+          const lm = landmarks[idx];
+          if (lm && (lm.visibility === undefined || lm.visibility > 0.2)) {
+            visibleCnt++;
+          }
+        }
+
+        if (visibleCnt < 3) {
+          return {
+            ready: false,
+            message:
+              "몸 전체가 화면 안에 대략 보이도록 한 번만 더 조정해 주세요.",
+          };
+        }
+
+        return { ready: true, message: "관절 인식 양호" };
+      }
+
+      // 🔊 실시간 코칭 메시지
+      function sendRealtimeCoach(mainMessage, detailMessage = "") {
+        const now = Date.now();
+        const COACH_COOLDOWN = 4000;
+
+        if (now - lastCoachTime < COACH_COOLDOWN) return;
+        lastCoachTime = now;
+
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            {
+              type: "STEPUP_REALTIME",
+              mainMessage,
+              detailMessage,
+            },
+            "*"
+          );
+        }
+      }
+
+      // 🔹 기준 각도 뽑기 (정자세 샘플)
+      function exportReferenceAngles() {
+        if (!lastAngles) return;
+
+        const payload = {
+          type: "PUSHUP_REF_ANGLE",
+          timestamp: Date.now(),
+          ...lastAngles,
+        };
+
+        console.log(JSON.stringify(payload));
+
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            {
+              type: "STEPUP_REF_ANGLE",
+              angles: payload,
+            },
+            "*"
+          );
+        }
+      }
+
+      // 🔹 세트 동안 팔꿈치 각도 기록
+      function recordElbowAngleForSet(angle) {
+        if (!Number.isFinite(angle)) return;
+        setElbowAngles.push(angle);
+      }
+
+      // 🔹 세트 끝났을 때 팔꿈치 각도 기반 피드백
+      function getElbowFeedbackText(angles) {
+        if (!angles || angles.length === 0) {
+          return "이번 세트에서는 팔꿈치 각도 데이터를 충분히 얻지 못했어요. 다음 세트에서는 화면 중앙에서 조금만 더 또렷하게 움직여 볼까요?";
+        }
+
+        const sum = angles.reduce((acc, v) => acc + v, 0);
+        const avg = sum / angles.length;
+
+        if (avg < IDEAL_ELBOW_MIN - 5) {
+          return "팔꿈치가 몸통에 너무 가깝게 붙어 있어요. 손 간격을 살짝 더 넓히고, 팔꿈치가 옆으로 조금 더 벌어지도록 해 주세요.";
+        }
+        if (avg > IDEAL_ELBOW_MAX + 5) {
+          return "팔이 조금 많이 벌어져 있어요. 손 간격을 어깨너비 정도로 좁히고, 팔꿈치가 몸통에서 45도 정도만 벌어지도록 맞춰 보세요.";
+        }
+
+        return "팔꿈치 각도는 전반적으로 좋은 편이에요! 지금 느낌을 기억하면서 다음 세트도 같은 폭으로 유지해 보세요.";
+      }
+
+      // 🔹 세트 요약 피드백 (부모 React로 전송)
+      function postSetFeedbackToParent() {
+        const total =
+          repsInCurrentSet || goodRepsInSet + badRepsInSet || 1;
+        const qualityRate = Math.round(
+          (goodRepsInSet / (goodRepsInSet + badRepsInSet || 1)) * 100
+        );
+        const score = qualityRate;
+        lastSetScore = score; // ✅ 영상 업로드용으로 저장
+
+        const mainMessage = `${currentSetIndex}세트 (${total}회) 완료! 수고하셨어요 👏`;
+
+        const baseSummary = `정자세(좋은 자세) : ${goodRepsInSet}회
+보완이 필요한 동작 : ${badRepsInSet}회`;
+
+        let detailMessage = "";
+
+        if (badRepsInSet === 0) {
+          detailMessage = `${baseSummary}
+
+이번 세트에서는 거의 모든 동작을 안정적인 자세로 수행하셨어요 👍
+팔꿈치 각도와 몸의 라인도 전체적으로 잘 유지되었습니다.
+지금 느낌을 그대로 기억해서 다음 세트도 같은 리듬으로 이어가 볼까요?`;
+        } else {
+          const elbowFeedback = getElbowFeedbackText(setElbowAngles);
+
+          detailMessage = `${baseSummary}
+
+${elbowFeedback}
+가슴은 바닥 쪽으로 조금 더 내려가되, 허리와 엉덩이가 과하게 꺼지지 않도록
+어깨–엉덩이–발목이 한 줄에 가깝게 유지되는 느낌으로 해 주세요.`;
+        }
+
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            {
+              type: "STEPUP_FEEDBACK",
+              score,
+              mainMessage,
+              detailMessage,
+              reps: total,
+            },
+            "*"
+          );
+        }
+
+        statusInfo.textContent = `${currentSetIndex}세트 완료! 잠시 호흡을 정리한 뒤 다음 세트를 준비해 주세요.`;
+      }
+
+      // 🔍 잘못된 자세 체크(허리 꺼짐 / 엉덩이 들림)
+      function checkFormErrors(landmarks, elbowAngle, bodyStraightAngle) {
+        const leftShoulder = landmarks[11];
+        const rightShoulder = landmarks[12];
+        const leftHip = landmarks[23];
+        const rightHip = landmarks[24];
+        const leftAnkle = landmarks[27];
+        const rightAnkle = landmarks[28];
+
+        if (
+          !leftShoulder ||
+          !rightShoulder ||
+          !leftHip ||
+          !rightHip ||
+          !leftAnkle ||
+          !rightAnkle
+        ) {
+          return;
+        }
+
+        // 몸이 거의 일직선이면 굳이 경고 안 띄움
+        if (!bodyStraightAngle || bodyStraightAngle >= 170) {
+          return;
+        }
+
+        const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+        const hipY = (leftHip.y + rightHip.y) / 2;
+        const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
+
+        const midBodyY = (shoulderY + ankleY) / 2;
+        const diff = hipY - midBodyY;
+
+        // 기준 완화: 0.03 → 0.06
+        const THRESH = 0.06;
+
+        const isTopPhase = elbowAngle >= 140;
+        if (!isTopPhase) return;
+
+        if (diff > THRESH) {
+          sendRealtimeCoach(
+            "허리가 조금 아래로 꺼져 있어요.",
+            "배와 허리를 살짝 끌어올려서 어깨부터 발까지가 일직선이 되도록 만들어 주세요."
+          );
+        } else if (diff < -THRESH) {
+          sendRealtimeCoach(
+            "엉덩이가 조금 너무 올라갔어요.",
+            "엉덩이를 살짝 내려서 어깨, 엉덩이, 발목이 한 줄이 되도록 맞춰볼게요."
+          );
+        }
+      }
+
+      // ===========================
+      // 🎥 세트 영상 녹화 + 업로드
+      // ===========================
+      let mediaRecorder = null;
+      let recordedChunks = [];
+      let isRecording = false;
+
+      let lastUploadSetIndex = null;
+      let lastUploadReps = null;
+      let lastUploadScore = null;
+
+      let recordingStartedForCurrentSet = false;
+
+      function startRecordingIfPossible() {
+        if (isRecording || recordingStartedForCurrentSet) return;
+
+        const stream = videoEl.srcObject;
+        if (!stream) {
+          console.warn("🎥 srcObject 없음, 녹화 시작 불가");
+          return;
+        }
+
+        try {
+          mediaRecorder = new MediaRecorder(stream, {
+            mimeType: "video/webm;codecs=vp8",
+          });
+        } catch (err) {
+          console.error("MediaRecorder 생성 실패:", err);
+          return;
+        }
+
+        recordedChunks = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            recordedChunks.push(e.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          try {
+            if (!recordedChunks.length) return;
+
+            const blob = new Blob(recordedChunks, { type: "video/webm" });
+            recordedChunks = [];
+
+            const formData = new FormData();
+            formData.append("video", blob, "pushup-set.webm");
+
+            const res = await fetch(
+              "http://localhost:4000/api/upload-video",
+              {
+                method: "POST",
+                body: formData,
+              }
+            );
+
+            const data = await res.json();
+            console.log("🎥 세트 영상 업로드 완료:", data);
+
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(
+                {
+                  type: "STEPUP_VIDEO_UPLOADED",
+                  setIndex: lastUploadSetIndex,
+                  reps: lastUploadReps,
+                  score: lastUploadScore,
+                  videoUrl: data.videoUrl,
+                },
+                "*"
+              );
+            }
+          } catch (err) {
+            console.error("❌ 세트 영상 업로드 실패:", err);
+          }
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        recordingStartedForCurrentSet = true;
+        console.log("🎥 녹화 시작");
+      }
+
+      function stopRecordingAndUpload(setIndex, reps, score) {
+        if (!mediaRecorder || !isRecording) return;
+        lastUploadSetIndex = setIndex;
+        lastUploadReps = reps;
+        lastUploadScore = score ?? null;
+        isRecording = false;
+        mediaRecorder.stop();
+        console.log("🎥 녹화 중지, 업로드 시작");
+      }
+
+      // 🔹 세트 완료 체크
+      function checkSetComplete() {
+        if (repsInCurrentSet >= targetRepsPerSet) {
+          const finishedSetIndex = currentSetIndex;
+          const finishedReps = repsInCurrentSet;
+
+          // 1) 세트 피드백 (점수 계산 + lastSetScore 갱신)
+          postSetFeedbackToParent();
+
+          // 2) 영상 녹화 중지 + 업로드
+          stopRecordingAndUpload(
+            finishedSetIndex,
+            finishedReps,
+            lastSetScore
+          );
+
+          // 3) 다음 세트 준비
+          currentSetIndex += 1;
+          repsInCurrentSet = 0;
+          goodRepsInSet = 0;
+          badRepsInSet = 0;
+          minAngleThisRep = 999;
+          setElbowAngles = [];
+          lastSetScore = null;
+          recordingStartedForCurrentSet = false;
+
+          calibrated = false;
+          readyPoseFrames = 0;
+
+          countInfo.textContent = "반복 횟수: 0회";
+          setInfo.textContent = `세트: ${currentSetIndex}세트 진행 중 (세트당 ${targetRepsPerSet}회)`;
+        }
+      }
+
+      // =====================================================
+      // onResults : 웹캠 + 가이드라인 + 스켈레톤 + 근육 하이라이트
+      // =====================================================
+      function onResults(results) {
+        ctx.save();
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+        // 1) 웹캠 영상
+        if (results.image) {
+          ctx.drawImage(results.image, 0, 0, canvasEl.width, canvasEl.height);
+        }
+
+        // 2) 가이드라인 : 아직 캘리브레이션 안됐을 때만 보임
+        const guideRect = getGuideRect();
+        if (!calibrated && guideImg.complete) {
+          ctx.save();
+          ctx.globalAlpha = 0.4;
+          ctx.drawImage(
+            guideImg,
+            guideRect.x,
+            guideRect.y,
+            guideRect.w,
+            guideRect.h
+          );
+          ctx.restore();
+        }
+
+        // 3) 포즈 인식
+        if (results.poseLandmarks) {
+          const landmarks = results.poseLandmarks;
+          lostPoseFrames = 0;
+
+          lastAngles = computeAllAngles(landmarks);
+          const elbowAngle = lastAngles.elbow_angle;
+          const bodyStraight = lastAngles.body_straight_angle ?? 180;
+
+          // ===== 3-1. 기본 스켈레톤 =====
+          ctx.save();
+          ctx.globalAlpha = 0.8;
+          window.drawConnectors(ctx, landmarks, window.POSE_CONNECTIONS, {
+            color: "#00fff0",
+            lineWidth: 2,
+          });
+          window.drawLandmarks(ctx, landmarks, {
+            color: "#ffff66",
+            radius: 3,
+          });
+          ctx.restore();
+
+          // ===== 3-2. 운동 부위 하이라이트 =====
+          let depthFactor = (DOWN_ELBOW_MAX + 20 - elbowAngle) / 40;
+          depthFactor = Math.max(0, Math.min(1, depthFactor));
+
+          let coreFactor = (bodyStraight - 150) / 30;
+          coreFactor = Math.max(0, Math.min(1, coreFactor));
+
+          function highlightBone(i, j) {
+            const a = {
+              x: landmarks[i].x * canvasEl.width,
+              y: landmarks[i].y * canvasEl.height,
+            };
+            const b = {
+              x: landmarks[j].x * canvasEl.width,
+              y: landmarks[j].y * canvasEl.height,
+            };
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+
+          if (depthFactor > 0.05) {
+            ctx.save();
+            ctx.globalAlpha = 0.25 + 0.5 * depthFactor;
+            ctx.strokeStyle = "#ff3b3b";
+            ctx.lineWidth = 5 + 5 * depthFactor;
+
+            highlightBone(11, 13);
+            highlightBone(13, 15);
+            highlightBone(12, 14);
+            highlightBone(14, 16);
+
+            ctx.restore();
+          }
+
+          if (coreFactor > 0.05) {
+            ctx.save();
+            ctx.globalAlpha = 0.18 + 0.4 * coreFactor;
+            ctx.strokeStyle = "#ff7b7b";
+            ctx.lineWidth = 4 + 4 * coreFactor;
+
+            const shMid = {
+              x: ((landmarks[11].x + landmarks[12].x) / 2) * canvasEl.width,
+              y: ((landmarks[11].y + landmarks[12].y) / 2) * canvasEl.height,
+            };
+            const hipMid = {
+              x: ((landmarks[23].x + landmarks[24].x) / 2) * canvasEl.width,
+              y: ((landmarks[23].y + landmarks[24].y) / 2) * canvasEl.height,
+            };
+
+            ctx.beginPath();
+            ctx.moveTo(shMid.x, shMid.y);
+            ctx.lineTo(hipMid.x, hipMid.y);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // ===== 3-3. 캘리브레이션(초기 정자세 맞추기) =====
+          if (!calibrated) {
+            const poseInfo = checkPoseReady(landmarks);
+
+            if (!poseInfo.ready) {
+              readyPoseFrames = 0;
+              statusInfo.textContent = `상태: ${poseInfo.message}`;
+              ctx.restore();
+              return;
+            }
+
+            const elbowOk = elbowAngle >= 145 && elbowAngle <= 190;
+            const bodyOk = bodyStraight >= 165 && bodyStraight <= 195;
+
+            if (elbowOk && bodyOk) {
+              readyPoseFrames++;
+              statusInfo.textContent =
+                "상태: 좋습니다! 잠시만 그 자세를 유지해 주세요.";
+
+              // 약 2초 유지되면 준비 완료 + 이 시점에서 녹화 시작
+              if (readyPoseFrames >= 60) {
+                calibrated = true;
+                statusInfo.textContent =
+                  "상태: 준비 완료 · 이제 카운트 시작합니다!";
+
+                // ✅ 카운트 ON 상태라면, 가이드라인 사라지는 순간부터 세트 녹화 시작
+                if (countingEnabled && !isRecording) {
+                  console.log("🎥 가이드 사라짐 → 녹화 시작");
+                  startRecordingIfPossible();
+                }
+              }
+            } else {
+              readyPoseFrames = 0;
+              statusInfo.textContent =
+                "상태: 가이드에 맞게 몸을 일직선으로 맞춰 주세요.";
+            }
+
+            if (!calibrated) {
+              ctx.restore();
+              return;
+            }
+          }
+
+          // ===== 3-4. 카운트 / 코칭 로직 =====
+          const leftShoulder = landmarks[11];
+          const leftElbow = landmarks[13];
+          const leftWrist = landmarks[15];
+          const rightShoulder = landmarks[12];
+          const rightElbow = landmarks[14];
+          const rightWrist = landmarks[16];
+
+          const valid =
+            leftShoulder &&
+            leftElbow &&
+            leftWrist &&
+            rightShoulder &&
+            rightElbow &&
+            rightWrist &&
+            leftShoulder.visibility > 0.3 &&
+            leftElbow.visibility > 0.3 &&
+            leftWrist.visibility > 0.3 &&
+            rightShoulder.visibility > 0.3 &&
+            rightElbow.visibility > 0.3 &&
+            rightWrist.visibility > 0.3;
+
+          if (valid) {
+            if (countingEnabled) {
+              checkFormErrors(landmarks, elbowAngle, bodyStraight);
+            }
+
+            if (!countingEnabled) {
+              statusInfo.textContent = `상태: 준비 완료 · 팔꿈치 ${elbowAngle.toFixed(
+                1
+              )}°`;
+            } else {
+              const now = Date.now();
+
+              const isDownPose = elbowAngle <= DOWN_ELBOW_MAX;
+              const isUpPose = elbowAngle >= UP_ELBOW_MIN;
+
+              if (phase === "up" && isDownPose) {
+                phase = "down";
+                minAngleThisRep = elbowAngle;
+                statusInfo.textContent = `상태: 아래로 이동 중 · 팔꿈치 ${elbowAngle.toFixed(
+                  1
+                )}°`;
+              } else if (phase === "down") {
+                if (elbowAngle < minAngleThisRep) {
+                  minAngleThisRep = elbowAngle;
+                }
+
+                if (isUpPose) {
+                  if (now - lastRepTime > 500) {
+                    phase = "up";
+                    lastRepTime = now;
+
+                    totalRepCount += 1;
+                    repsInCurrentSet += 1;
+
+                    recordElbowAngleForSet(minAngleThisRep);
+
+                    countInfo.textContent = `반복 횟수: ${repsInCurrentSet}회`;
+                    statusInfo.textContent = `상태: 위(1회 완료) · 팔꿈치 ${elbowAngle.toFixed(
+                      1
+                    )}°`;
+
+                    const goodDepth =
+                      minAngleThisRep <= DOWN_ELBOW_MAX - 10;
+                    if (goodDepth) {
+                      goodRepsInSet += 1;
+                      exportReferenceAngles();
+
+                      if (Math.random() < 0.3) {
+                        sendRealtimeCoach(
+                          "좋아요, 깊이 아주 좋습니다.",
+                          "지금처럼 가슴을 충분히 내려주면 가슴과 삼두에 자극이 잘 들어갑니다."
+                        );
+                      }
+                    } else {
+                      badRepsInSet += 1;
+
+                      sendRealtimeCoach(
+                        "조금만 더 깊게 내려가 볼까요?",
+                        "팔꿈치 각도가 아직 충분히 접히지 않았어요. 가슴이 바닥 쪽으로 조금 더 가까워지도록 해 보세요."
+                      );
+                    }
+
+                    minAngleThisRep = 999;
+                    checkSetComplete();
+                  }
+                } else {
+                  statusInfo.textContent = `상태: 아래 자세 유지 · 팔꿈치 ${elbowAngle.toFixed(
+                    1
+                  )}°`;
+                }
+              } else {
+                statusInfo.textContent = `상태: 이동 중 · 팔꿈치 ${elbowAngle.toFixed(
+                  1
+                )}°`;
+              }
+            }
+          } else {
+            statusInfo.textContent = "상태: 자세 인식 중...";
+          }
+        } else {
+          // 포즈 자체가 없는 프레임
+          lostPoseFrames++;
+
+          if (calibrated && lostPoseFrames > 60) {
+            calibrated = false;
+            readyPoseFrames = 0;
+            recordingStartedForCurrentSet = false;
+            statusInfo.textContent =
+              "상태: 자세가 오래 인식되지 않았어요. 가이드에 다시 맞춰 주세요.";
+          } else if (!calibrated) {
+            statusInfo.textContent = "상태: 자세 인식 중 ...";
+          }
+        }
+
+        ctx.restore();
+      }
+
+      // MediaPipe Pose 세팅
+      const pose = new window.Pose({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`,
+      });
+
+      pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      pose.onResults(onResults);
+
+      // 🔹 카메라만 켜는 함수
+      async function startCameraInternal() {
+        if (camera) {
+          console.log("📷 이미 카메라가 시작됨");
+          return;
+        }
+
+        statusInfo.textContent = "상태: 카메라 준비 중...";
+
+        try {
+          camera = new window.Camera(videoEl, {
+            onFrame: async () => {
+              await pose.send({ image: videoEl });
+            },
+            width: 640,
+            height: 360,
+          });
+
+          await camera.start();
+          statusInfo.textContent = "상태: 인식 중...";
+          console.log("✅ 카메라 시작 성공");
+        } catch (err) {
+          console.error("❌ 카메라 시작 실패:", err);
+          statusInfo.textContent =
+            "카메라 권한을 허용했는지 확인해 주세요 (주소창의 카메라 아이콘).";
+          alert(
+            "카메라를 사용할 수 없습니다.\n브라우저 주소창 오른쪽의 카메라 아이콘에서 '허용'으로 바꿔주세요."
+          );
+        }
+      }
+
+      // 🔹 카운트 상태 초기화 + 카운트 ON
+      function startCounting() {
+        countingEnabled = true;
+        phase = "up";
+        totalRepCount = 0;
+        repsInCurrentSet = 0;
+        currentSetIndex = 1;
+        goodRepsInSet = 0;
+        badRepsInSet = 0;
+        lastRepTime = 0;
+        minAngleThisRep = 999;
+        lastAngles = null;
+        setElbowAngles = [];
+        lastSetScore = null;
+
+        calibrated = false;
+        readyPoseFrames = 0;
+        lostPoseFrames = 0;
+
+        recordingStartedForCurrentSet = false;
+        isRecording = false;
+        mediaRecorder = null;
+        recordedChunks = [];
+
+        countInfo.textContent = "반복 횟수: 0회";
+        setInfo.textContent = `세트: ${currentSetIndex}세트 진행 중 (세트당 ${targetRepsPerSet}회)`;
+        statusInfo.textContent = "상태: 인식 중...";
+
+        sendRealtimeCoach(
+          `${currentSetIndex}세트 시작합니다. 천천히 첫 동작을 내려가 볼까요?`
+        );
+      }
+
+      // 🔹 React에서 직접 호출할 수 있게 전역 노출
+      window.startCamera = function () {
+        startCounting();
+        startCameraInternal();
+      };
+
+      // 🔹 React(Pose.jsx)에서 보내는 메시지 처리
+      window.addEventListener("message", (event) => {
+        if (!event.data || typeof event.data !== "object") return;
+        const { type } = event.data;
+
+        if (type === "STEPUP_START_CAMERA") {
+          console.log("▶ STEPUP_START_CAMERA 수신");
+          startCounting();
+          startCameraInternal();
+        }
+
+        if (type === "STEPUP_SET_TARGET") {
+          console.log("🎯 목표 세팅:", event.data);
+          targetSetsPerDay = event.data.setsPerDay ?? targetSetsPerDay;
+          targetRepsPerSet = event.data.repsPerSet ?? targetRepsPerSet;
+
+          setInfo.textContent = `세트: ${currentSetIndex}세트 진행 중 (세트당 ${targetRepsPerSet}회)`;
+          modeInfo.textContent = `푸쉬업 모드 · 목표: ${targetSetsPerDay}세트 × ${targetRepsPerSet}회`;
+        }
+      });
+    </script>
+  </body>
+</html>
