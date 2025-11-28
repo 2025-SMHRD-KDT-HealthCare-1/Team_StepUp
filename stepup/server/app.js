@@ -1,12 +1,27 @@
 // server/app.js
 
+// =======================
+// 기본 설정 / 모듈
+// =======================
 const express = require("express");
 const cors = require("cors");
 const mysql = require("mysql2/promise");
 const dotenv = require("dotenv");
 
-// .env 읽어오기
+// 1) .env 먼저 읽기
 dotenv.config();
+
+// 2) Stripe 불러오기 (.env 읽은 뒤!)
+const Stripe = require("stripe");
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+
+// 체크용 (필수는 아님)
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn("⚠ STRIPE_SECRET_KEY가 .env에 없습니다.");
+}
+if (!process.env.STRIPE_PREMIUM_PRICE_ID) {
+  console.warn("⚠ STRIPE_PREMIUM_PRICE_ID가 .env에 없습니다.");
+}
 
 const app = express();
 
@@ -21,7 +36,9 @@ app.use(
   })
 );
 
-// 🔹 MySQL 풀 생성 (.env 사용)
+// =======================
+// MySQL 커넥션 풀
+// =======================
 const pool = mysql.createPool({
   host: process.env.DB_HOST, // project-db-campus.smhrd.com
   port: process.env.DB_PORT, // 3307
@@ -153,7 +170,8 @@ app.get("/api/board/list", async (req, res) => {
     res.status(500).json({ message: "서버 오류(게시글 목록)" });
   }
 });
-// ✅ 게시글 상세 조회 (글 클릭 시 사용)
+
+// ✅ 게시글 상세 조회
 app.get("/api/board/:id", async (req, res) => {
   const { id } = req.params;
 
@@ -273,6 +291,7 @@ app.delete("/api/board/:id", async (req, res) => {
     res.status(500).json({ message: "서버 오류(게시글 삭제)" });
   }
 });
+
 // 댓글 목록 조회
 app.get("/api/board/:id/comments", async (req, res) => {
   const { id } = req.params;
@@ -310,14 +329,45 @@ app.post("/api/board/:id/comment", async (req, res) => {
 });
 
 // =======================
+// 3) Stripe 결제 라우트
+// =======================
+app.post("/api/pay/create-checkout-session", async (req, res) => {
+  try {
+    const { userId, email } = req.body || {};
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price: process.env.STRIPE_PREMIUM_PRICE_ID, // .env에 있는 price ID
+          quantity: 1,
+        },
+      ],
+      customer_email: email || undefined,
+      metadata: {
+        userId: userId || "",
+      },
+      success_url: "http://localhost:5173/settings?payment=success",
+      cancel_url: "http://localhost:5173/settings?payment=cancel",
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =======================
 // 서버 실행
 // =======================
 const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
-  console.log(`✅ StepUp 서버 실행 중: http://localhost:${PORT}`);
+  console.log(`StepUp 서버 실행 중: http://localhost:${PORT}`);
 });
 
 server.on("error", (err) => {
-  console.error("🛑 서버 실행 중 오류 발생:", err);
+  console.error("서버 실행 중 오류 발생:", err);
 });
