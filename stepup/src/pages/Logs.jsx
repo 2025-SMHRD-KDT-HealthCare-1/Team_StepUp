@@ -178,7 +178,7 @@ export default function Logs() {
 
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 16px" }}>
         {/* 상단 타이틀 + 사용자 정보 */}
-        <h2 style={{ marginBottom: 8 }}>운동 기록</h2>
+        <h1 style={{ marginBottom: 16, textAlign: "center" }}>운동 기록</h1>
 
         <div
           style={{

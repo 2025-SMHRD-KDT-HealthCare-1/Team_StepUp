@@ -5,6 +5,8 @@ import { useAuth } from "../context/AuthContext";
 import MainNav from "../components/MainNav";
 import { useNavigate } from "react-router-dom";
 
+// 댓글 이미지
+import comment from "../icon/comment.svg";
 const API_BASE = "http://localhost:5000";
 
 export default function Board() {
@@ -12,6 +14,7 @@ export default function Board() {
 
   // 탭: suggestion | trainer
   const [tab, setTab] = useState("suggestion");
+  
 
   // 글 목록
   const [posts, setPosts] = useState([]);
@@ -225,7 +228,8 @@ const submitComment = async (postId) => {
                 cursor: "pointer",
                 background: tab === "suggestion" ? "#000" : "#ddd",
                 color: tab === "suggestion" ? "#fff" : "#333",
-                fontSize: 13,
+                fontSize: 15,
+                fontWeight: 500
               }}
             >
               건의 · 요청
@@ -239,7 +243,8 @@ const submitComment = async (postId) => {
                 cursor: "pointer",
                 background: tab === "trainer" ? "#000" : "#ddd",
                 color: tab === "trainer" ? "#fff" : "#333",
-                fontSize: 13,
+                fontSize: 15,
+                fontWeight: 500
               }}
             >
               트레이너 홍보
@@ -250,16 +255,17 @@ const submitComment = async (postId) => {
             <button
               onClick={() => setShowForm((prev) => !prev)}
               style={{
-                padding: "6px 12px",
+                padding: "8px 16px",
                 borderRadius: 999,
                 border: "none",
                 background: showForm ? "#777" : "#000",
                 color: "#fff",
-                fontSize: 13,
+                fontSize: 15,
                 cursor: "pointer",
+                fontWeight: 500
               }}
             >
-              {showForm ? "글쓰기 닫기" : "글쓰기"}
+              {showForm ? "작성 취소" : "게시글 작성"}
             </button>
           )}
         </div>
@@ -396,7 +402,7 @@ const submitComment = async (postId) => {
                   cursor: "pointer",
                 }}
               >
-                글 올리기
+                게시글 등록
               </button>
             </div>
           </form>
@@ -438,31 +444,20 @@ const submitComment = async (postId) => {
                     gap: 6,
                   }}
                 >
-                  {/* type 표시 배지 */}
-                  <span
-                    style={{
-                      fontSize: 10,
-                      padding: "2px 6px",
-                      borderRadius: 999,
-                      background: "#eee",
-                      color: "#333",
-                    }}
-                  >
-                    {post.type}
-                  </span>
 
                   {/* 비밀글 배지 */}
                   {post.is_secret === 1 && (
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: 12,
                         padding: "2px 6px",
                         borderRadius: 999,
-                        background: "#9e9e9e",
+                        background: "#020024",
                         color: "#fff",
+                        fontWeight: 500
                       }}
                     >
-                      비밀글
+                      🔒비밀
                     </span>
                   )}
 
@@ -470,7 +465,9 @@ const submitComment = async (postId) => {
                   <span
                     style={{
                       fontWeight: 600,
+                      fontSize: 18,
                       flex: 1,
+                      cursor: "pointer"
                     }}
                   >
                     {post.title}
@@ -485,6 +482,7 @@ const submitComment = async (postId) => {
                         borderRadius: 999,
                         background: "#ff7043",
                         color: "#fff",
+                        cursor: "pointer"
                       }}
                     >
                       영상 포함
@@ -516,20 +514,22 @@ const submitComment = async (postId) => {
                 {/* 작성자/역할/시간 */}
                 <div
                   style={{
-                    fontSize: 11,
-                    color: "#888",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: "#020024",
                     display: "flex",
                     gap: 8,
+                    cursor: "pointer"
                   }}
                 >
                   <span>{post.nickname}</span>
                   <span>·</span>
-                  <span>
+                  <span style={{color: "#090979"}}>
                     {post.role === "trainer"
                       ? "트레이너"
                       : post.role === "admin"
                       ? "관리자"
-                      : "일반회원"}
+                      : "회원"}
                   </span>
                   {post.created_at && (
                     <>
@@ -549,7 +549,7 @@ const submitComment = async (postId) => {
     fontSize: 13
   }}>
     {/* 본문 */}
-    <div style={{ marginBottom: 12 }}>
+    <div style={{ marginBottom: 12, fontSize: 16, fontWeight: 600 }}>
       {post.content}
     </div>
 
@@ -563,10 +563,12 @@ const submitComment = async (postId) => {
     )}
 
     {/* 댓글 목록 */}
-    <div style={{ fontWeight: 600, marginBottom: 6 }}>댓글</div>
+    <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 16}}>
+    <img src={comment} alt="댓글" style={{ width: '18px', height: '16px' }}/>
+    &nbsp;댓글</div>
     {(comments[post.id] || []).map(c => (
-      <div key={c.id} style={{ fontSize: 12, marginBottom: 4 }}>
-        <b>{c.nickname}</b> : {c.content}
+      <div key={c.id} style={{ fontSize: 13, marginBottom: 4 }}>
+        <b style={{fontWeight: 600}}>{c.nickname}</b> : {c.content}
       </div>
     ))}
 
@@ -585,7 +587,15 @@ const submitComment = async (postId) => {
           }}
         />
         <button
-          style={{ marginLeft: 6 }}
+          style={{ marginLeft: 6, 
+                padding: "5px 12px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 500,
+                border: "none",
+                cursor: "pointer",
+                color: "#FFF",
+                background: "black" }}
           onClick={(e) => {
             e.stopPropagation();
             submitComment(post.id);

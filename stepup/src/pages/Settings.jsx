@@ -5,9 +5,15 @@ import MainNav from "../components/MainNav";
 import { useAuth } from "../context/AuthContext";
 
 // 🔥 Firebase 삭제용
+// 🔥 Firebase 삭제용
 import { auth, db } from "../firebase";
 import { doc, deleteDoc } from "firebase/firestore";
-import { deleteUser } from "firebase/auth";
+import {
+  deleteUser,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+} from "firebase/auth";
+
 
 export default function Settings() {
   const { user, nickname, plan, role } = useAuth();
@@ -27,32 +33,67 @@ export default function Settings() {
   };
 
   // 확인창에서 "네" → 실제 회원정보 삭제
-  const handleConfirmDelete = async () => {
-    if (!user) return;
+const handleConfirmDelete = async () => {
+  if (!user) return;
 
-    try {
-      setLoading(true);
+  try {
+    setLoading(true);
 
-      // 1) Firestore users 컬렉션에서 문서 삭제
-      await deleteDoc(doc(db, "users", user.uid));
-
-      // 2) Firebase Auth 계정 삭제
-      await deleteUser(auth.currentUser);
-
-      alert("회원 탈퇴가 완료되었습니다.");
-
-      setShowConfirm(false);
-
-      // 3) 메인 화면으로 보내고 새로고침 (auth 상태 초기화용)
-      navigate("/");
-      window.location.reload();
-    } catch (error) {
-      console.error("회원 탈퇴 오류:", error);
-      alert("회원 탈퇴 중 오류가 발생했습니다. 다시 시도해 주세요.");
-    } finally {
-      setLoading(false);
+    // 🔐 0) 현재 로그인 유저 체크
+    if (!auth.currentUser) {
+      alert("로그인 정보가 만료되었습니다. 다시 로그인 후 시도해 주세요.");
+      navigate("/login");
+      return;
     }
-  };
+
+    // 🔐 1) 비밀번호 재입력 받기 (간단 버전: prompt)
+    const password = window.prompt("보안을 위해 현재 비밀번호를 다시 입력해 주세요.");
+
+    // 사용자가 취소 누른 경우
+    if (!password) {
+      setLoading(false);
+      return;
+    }
+
+    // 🔐 2) 재인증용 credential 생성
+    const credential = EmailAuthProvider.credential(
+      auth.currentUser.email,
+      password
+    );
+
+    // 🔐 3) 재인증
+    await reauthenticateWithCredential(auth.currentUser, credential);
+
+    // ✅ 4) Firestore users 컬렉션에서 문서 삭제
+    await deleteDoc(doc(db, "users", auth.currentUser.uid));
+
+    // ✅ 5) Firebase Auth 계정 삭제
+    await deleteUser(auth.currentUser);
+
+    alert("회원 탈퇴가 완료되었습니다.");
+
+    setShowConfirm(false);
+
+    // ✅ 6) 메인 화면으로 보내고 새로고침 (auth 상태 초기화용)
+    navigate("/");
+    window.location.reload();
+  } catch (error) {
+    console.error("회원 탈퇴 오류:", error.code, error.message);
+
+    if (error.code === "auth/wrong-password") {
+      alert("비밀번호가 올바르지 않습니다. 다시 입력해 주세요.");
+    } else if (error.code === "auth/requires-recent-login") {
+      // 이건 재인증이 또 오래된 경우 (거의 안 나오긴 함)
+      alert("보안을 위해 다시 로그인 후 탈퇴를 진행해 주세요.");
+      navigate("/login");
+    } else {
+      alert("회원 탈퇴 중 오류가 발생했습니다. 다시 시도해 주세요.");
+    }
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <div style={{ background: "#f5f5f5", minHeight: "100vh" }}>
@@ -83,11 +124,30 @@ export default function Settings() {
           <p>플랜: {plan}</p>
           <p>권한: {role}</p>
 
+          {/* 🔹 이용권 결제 / 변경 버튼 */}
+          {/* <button
+            type="button"
+            onClick={() => navigate("/payment")}
+            style={{
+              marginTop: 12,
+              marginRight: 8,
+              padding: "8px 14px",
+              borderRadius: 9999,
+              border: "none",
+              background: "#1976d2",
+              color: "#fff",
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            이용권 결제 / 변경하기
+          </button> */}
+
           {/* 🔻 회원 탈퇴 버튼 */}
           <button
             onClick={handleClickDelete}
             style={{
-              marginTop: 16,
+              marginTop: 12,
               padding: "8px 14px",
               borderRadius: 9999,
               border: "none",

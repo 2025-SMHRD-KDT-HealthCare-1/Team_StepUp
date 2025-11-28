@@ -422,7 +422,7 @@ export default function Pose() {
           <div
             style={{
               borderRadius: 24,
-              background: "linear-gradient(90deg, #f8ff00 0%, #3ad59f 100%)",
+              background: "linear-gradient(90deg, #020024)",
               boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
               display: "flex",
               flexDirection: "column",
@@ -432,6 +432,7 @@ export default function Pose() {
               height: 500,
               padding: 0,
               overflow: "hidden",
+              color: "#fff"
             }}
           >
             <div style={{ width: "90%" }}>
@@ -459,10 +460,10 @@ export default function Pose() {
               />
               <div
                 style={{
-                  marginTop: 2,
+                  marginTop: 1,
                   fontSize: 15,
                   lineHeight: 1.4,
-                  color: "black",
+                  color: "#fff",
                 }}
               >
                 상단 자세에서는 대흉근(가슴), 삼두근, 전면 삼각근(어깨)에
@@ -480,7 +481,7 @@ export default function Pose() {
                   objectFit: "fill",
                   borderRadius: 16,
                   boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-                  marginTop: 3,
+                  marginTop: 8,
                 }}
                 alt="푸쉬업 하강 자세 자극 부위"
               />
@@ -489,7 +490,8 @@ export default function Pose() {
                   marginTop: 2,
                   fontSize: 15,
                   lineHeight: 1.4,
-                  color: "black",
+                  color: "#fff",
+                  marginBottom: 10
                 }}
               >
                 하강 구간에서는 가슴이 충분히 늘어나면서 어깨와 팔꿈치에
@@ -505,7 +507,7 @@ export default function Pose() {
             flex: 0.8,
             borderRadius: 24,
             padding: 24,
-            background: "linear-gradient(90deg, #00d2ff 0%, #3a47d5 100%)",
+            background: "linear-gradient(90deg, #090979)",
             color: "#fff",
             boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
             display: "flex",
@@ -513,33 +515,13 @@ export default function Pose() {
             gap: 16,
             alignItems: "center",
             height: 700,
+            color: "#fff"
           }}
         >
           <div
-            style={{ fontSize: 23, fontWeight: 600, color: "black" }}
+            style={{ fontSize: 23, fontWeight: 600}}
           >
             실시간 AI 자세 분석
-          </div>
-
-          <div
-            style={{
-              fontSize: 13,
-              opacity: 0.9,
-              lineHeight: 1.7,
-              textAlign: "center",
-              marginBottom: 4,
-            }}
-          >
-            현재 선택된 운동 : <b>{exerciseLabel}</b>
-            <br />
-            현재 회원 난이도 : <b>{difficultyLabel}</b>
-            <br />
-            오늘 목표 :{" "}
-            <b>
-              {setsPerDay}세트 × {repsPerSet}회 (총 {totalReps}회)
-            </b>
-            <br />
-            하루 약 {targetMinutes}분 안에서 위 루틴을 채워보세요.
           </div>
 
           {/* 카메라 컨테이너 */}
@@ -656,7 +638,7 @@ export default function Pose() {
             style={{
               borderRadius: 24,
               padding: 24,
-              background: "linear-gradient(90deg, #d53369 0%, #daae51 100%)",
+              background: "linear-gradient(90deg, #00D4FF)",
               color: "#fff",
               boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
               display: "flex",
@@ -669,34 +651,16 @@ export default function Pose() {
               style={{
                 fontSize: 23,
                 fontWeight: 600,
-                textAlign: "center",
-                color: "black",
+                textAlign: "center"
               }}
             >
               유튜브 참고 영상
             </div>
             <div
               style={{
-                fontSize: 14,
-                opacity: 0.9,
-                textAlign: "center",
-                marginBottom: 8,
-              }}
-            >
-              현재 선택된 운동 : <b>{exerciseLabel}</b>
-              <br />
-              현재 난이도 : <b>{difficultyLabel}</b>
-              <br />
-              오늘 목표 :{" "}
-              <b>
-                {setsPerDay}세트 × {repsPerSet}회 (총 {totalReps}회)
-              </b>
-            </div>
-            <div
-              style={{
                 borderRadius: 18,
                 background: "rgba(0, 0, 0, 0.4)",
-                height: 600,
+                height: 700,
                 overflow: "hidden",
               }}
             >
