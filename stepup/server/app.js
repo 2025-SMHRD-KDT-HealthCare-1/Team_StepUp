@@ -12,16 +12,16 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 // 2) Stripe 불러오기 (.env 읽은 뒤!)
-const Stripe = require("stripe");
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+// const Stripe = require("stripe");
+// const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
-// 체크용 (필수는 아님)
-if (!process.env.STRIPE_SECRET_KEY) {
-  console.warn("⚠ STRIPE_SECRET_KEY가 .env에 없습니다.");
-}
-if (!process.env.STRIPE_PREMIUM_PRICE_ID) {
-  console.warn("⚠ STRIPE_PREMIUM_PRICE_ID가 .env에 없습니다.");
-}
+// // 체크용 (필수는 아님)
+// if (!process.env.STRIPE_SECRET_KEY) {
+//   console.warn("⚠ STRIPE_SECRET_KEY가 .env에 없습니다.");
+// }
+// if (!process.env.STRIPE_PREMIUM_PRICE_ID) {
+//   console.warn("⚠ STRIPE_PREMIUM_PRICE_ID가 .env에 없습니다.");
+// }
 
 const app = express();
 
@@ -331,33 +331,33 @@ app.post("/api/board/:id/comment", async (req, res) => {
 // =======================
 // 3) Stripe 결제 라우트
 // =======================
-app.post("/api/pay/create-checkout-session", async (req, res) => {
-  try {
-    const { userId, email } = req.body || {};
+// app.post("/api/pay/create-checkout-session", async (req, res) => {
+//   try {
+//     const { userId, email } = req.body || {};
 
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price: process.env.STRIPE_PREMIUM_PRICE_ID, // .env에 있는 price ID
-          quantity: 1,
-        },
-      ],
-      customer_email: email || undefined,
-      metadata: {
-        userId: userId || "",
-      },
-      success_url: "http://localhost:5173/settings?payment=success",
-      cancel_url: "http://localhost:5173/settings?payment=cancel",
-    });
+//     const session = await stripe.checkout.sessions.create({
+//       mode: "subscription",
+//       payment_method_types: ["card"],
+//       line_items: [
+//         {
+//           price: process.env.STRIPE_PREMIUM_PRICE_ID, // .env에 있는 price ID
+//           quantity: 1,
+//         },
+//       ],
+//       customer_email: email || undefined,
+//       metadata: {
+//         userId: userId || "",
+//       },
+//       success_url: "http://localhost:5173/settings?payment=success",
+//       cancel_url: "http://localhost:5173/settings?payment=cancel",
+//     });
 
-    res.json({ url: session.url });
-  } catch (err) {
-    console.error("Stripe Error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
+//     res.json({ url: session.url });
+//   } catch (err) {
+//     console.error("Stripe Error:", err);
+//     res.status(500).json({ error: err.message });
+//   }
+// });
 
 // =======================
 // 서버 실행
