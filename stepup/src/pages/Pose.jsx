@@ -460,7 +460,7 @@ export default function Pose() {
               />
               <div
                 style={{
-                  marginTop: 2,
+                  marginTop: 1,
                   fontSize: 15,
                   lineHeight: 1.4,
                   color: "#fff",
@@ -481,7 +481,7 @@ export default function Pose() {
                   objectFit: "fill",
                   borderRadius: 16,
                   boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-                  marginTop: 3,
+                  marginTop: 8,
                 }}
                 alt="푸쉬업 하강 자세 자극 부위"
               />
@@ -491,6 +491,7 @@ export default function Pose() {
                   fontSize: 15,
                   lineHeight: 1.4,
                   color: "#fff",
+                  marginBottom: 10
                 }}
               >
                 하강 구간에서는 가슴이 충분히 늘어나면서 어깨와 팔꿈치에
