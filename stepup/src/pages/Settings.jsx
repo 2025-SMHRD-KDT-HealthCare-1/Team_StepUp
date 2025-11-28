@@ -83,11 +83,30 @@ export default function Settings() {
           <p>플랜: {plan}</p>
           <p>권한: {role}</p>
 
+          {/* 🔹 이용권 결제 / 변경 버튼 */}
+          <button
+            type="button"
+            onClick={() => navigate("/payment")}
+            style={{
+              marginTop: 12,
+              marginRight: 8,
+              padding: "8px 14px",
+              borderRadius: 9999,
+              border: "none",
+              background: "#1976d2",
+              color: "#fff",
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            이용권 결제 / 변경하기
+          </button>
+
           {/* 🔻 회원 탈퇴 버튼 */}
           <button
             onClick={handleClickDelete}
             style={{
-              marginTop: 16,
+              marginTop: 12,
               padding: "8px 14px",
               borderRadius: 9999,
               border: "none",

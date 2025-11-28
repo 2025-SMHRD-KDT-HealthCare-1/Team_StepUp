@@ -6,7 +6,8 @@ import Login from "./pages/Login.jsx";
 import Signup from "./pages/Signup.jsx";
 import Home from "./pages/Home.jsx";
 import Exercise from "./pages/Exercise.jsx";
-// import Room from "./pages/Room.jsx"; // 안 쓰면 그대로 주석
+// Room은 안 쓰면 주석 또는 삭제
+// import Room from "./pages/Room.jsx";
 import Workouts from "./pages/Workouts.jsx";
 import Pose from "./pages/Pose.jsx";
 import Videos from "./pages/Videos.jsx";
@@ -14,7 +15,7 @@ import Logs from "./pages/Logs.jsx";
 import Settings from "./pages/Settings.jsx";
 import Survey from "./pages/Survey.jsx";
 import Board from "./pages/Board.jsx";
-import BoardDetail from "./pages/BoardDetail.jsx";   // ✅ 새로 추가
+import Payment from "./pages/PayMent.jsx";   // 🔹 결제 페이지 추가
 
 import PageError from "./PageError.jsx";
 
@@ -65,7 +66,6 @@ export default function App() {
           </PrivateRoute>
         }
       />
-
       <Route
         path="/exercise/:exId"
         element={
@@ -76,8 +76,6 @@ export default function App() {
           </PrivateRoute>
         }
       />
-
-      {/* 게시판 목록 */}
       <Route
         path="/board"
         element={
@@ -86,17 +84,6 @@ export default function App() {
           </PrivateRoute>
         }
       />
-
-      {/* 게시판 상세 ✅ 추가 */}
-      <Route
-        path="/board/:id"
-        element={
-          <PrivateRoute>
-            <BoardDetail />
-          </PrivateRoute>
-        }
-      />
-
       {/* Room은 잠깐 막기
       <Route
         path="/room"
@@ -109,7 +96,6 @@ export default function App() {
         }
       />
       */}
-
       <Route
         path="/workouts"
         element={
@@ -165,6 +151,18 @@ export default function App() {
         element={
           <PrivateRoute>
             <Survey />
+          </PrivateRoute>
+        }
+      />
+
+      {/* 🔹 결제 페이지 라우트 추가 */}
+      <Route
+        path="/payment"
+        element={
+          <PrivateRoute>
+            <PageError>
+              <Payment />
+            </PageError>
           </PrivateRoute>
         }
       />
