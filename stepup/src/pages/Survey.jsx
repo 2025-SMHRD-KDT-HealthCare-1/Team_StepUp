@@ -73,7 +73,8 @@ export default function Survey() {
       );
 
       alert("초기 설문이 저장되었습니다.\n홈 화면으로 이동합니다.");
-      nav("/home");
+      nav("/home")
+      window.location.reload();
     } catch (err) {
       console.error(err);
       alert("설문 저장 중 오류가 발생했습니다.\n다시 시도해주세요.");

@@ -29,7 +29,7 @@
         width: 100%;
         height: 100%;
         object-fit: cover;
-        /* transform: scaleX(-1); 셀카처럼 거울 모드 (현재 해제 상태 유지) */
+        /* transform: scaleX(-1);  거울 모드 해제 유지 */
       }
       #overlayUi {
         position: absolute;
@@ -78,13 +78,20 @@
 
       let camera = null;
 
+      // ============================
+      //  정자세 기준 각도(코랩 샘플)
+      // ============================
+      //   elbow_angle          ≈  88.7°
+      //   hip_angle            ≈ 178.6°
+      //   body_straight_angle  ≈ 178.2°
+
       // 🔹 반복/세트 카운트
       let totalRepCount = 0;
       let repsInCurrentSet = 0;
       let currentSetIndex = 1;
 
-      let goodRepsInSet = 0; // 깊이 충분
-      let badRepsInSet = 0; // 얕은 동작
+      let goodRepsInSet = 0; // 깊이 + 몸 라인 모두 괜찮은 정자세
+      let badRepsInSet = 0; // 깊이 부족 / 몸 라인 많이 무너짐
 
       let phase = "up"; // up -> down -> up = 1회
       let countingEnabled = false;
@@ -117,12 +124,12 @@
       const UP_ELBOW_MIN = 150; // 이 이상 → 올라온 자세
 
       // "이 정도 각도면 적당"한 범위
-      const IDEAL_ELBOW_MIN = 80; // 너무 작으면 팔이 지나치게 접힘
-      const IDEAL_ELBOW_MAX = 110; // 너무 크면 팔이 덜 접힘
+      const IDEAL_ELBOW_MIN = 80;
+      const IDEAL_ELBOW_MAX = 110;
 
       // 🔹 가이드라인 이미지
       const guideImg = new Image();
-      guideImg.src = "guideline_output.png"; // pushup.html이랑 같은 폴더
+      guideImg.src = "guideline_output.png";
 
       function resizeCanvas() {
         const rect = canvasEl.getBoundingClientRect();
@@ -132,16 +139,14 @@
       window.addEventListener("resize", resizeCanvas);
       resizeCanvas();
 
-      // 가이드라인 위치/크기
       function getGuideRect() {
-        const w = canvasEl.width * 1.0; // 가로 100%
-        const h = canvasEl.height * 0.9; // 세로 90%
+        const w = canvasEl.width * 1.0;
+        const h = canvasEl.height * 0.9;
         const x = (canvasEl.width - w) / 2;
         const y = canvasEl.height - h - 20;
         return { x, y, w, h };
       }
 
-      // 세 점 a, b, c로 b 기준 각도 계산
       function getAngle(a, b, c) {
         const ab = { x: a.x - b.x, y: a.y - b.y };
         const cb = { x: c.x - b.x, y: c.y - b.y };
@@ -154,7 +159,6 @@
         return angle;
       }
 
-      // 🔹 포즈에서 여러 각도 계산
       function computeAllAngles(landmarks) {
         const leftShoulder = landmarks[11];
         const leftElbow = landmarks[13];
@@ -170,12 +174,10 @@
         const leftAnkle = landmarks[27];
         const rightAnkle = landmarks[28];
 
-        // 팔꿈치 각도 (양쪽 평균)
         const leftElbowAngle = getAngle(leftShoulder, leftElbow, leftWrist);
         const rightElbowAngle = getAngle(rightShoulder, rightElbow, rightWrist);
         const elbowAngle = (leftElbowAngle + rightElbowAngle) / 2;
 
-        // 엉덩이 각도: (어깨 - 엉덩이 - 무릎)
         let hipAngle = null;
         if (leftHip && rightHip && leftKnee && rightKnee) {
           const leftHipAngle = getAngle(leftShoulder, leftHip, leftKnee);
@@ -183,7 +185,6 @@
           hipAngle = (leftHipAngle + rightHipAngle) / 2;
         }
 
-        // 몸 라인 각도: (어깨 - 엉덩이 - 발목)
         let bodyStraightAngle = null;
         if (leftHip && rightHip && leftAnkle && rightAnkle) {
           const leftBodyAngle = getAngle(leftShoulder, leftHip, leftAnkle);
@@ -200,7 +201,6 @@
         };
       }
 
-      // 🔹 "푸쉬업 준비자세" 체크 (너무 빡세지 않게)
       function checkPoseReady(landmarks) {
         let minY = 1,
           maxY = 0;
@@ -211,7 +211,6 @@
         }
         const heightNorm = maxY - minY;
 
-        // 너무 멀리 있을 때 막기
         const MIN_HEIGHT = 0.15;
         if (heightNorm < MIN_HEIGHT) {
           return {
@@ -220,17 +219,15 @@
           };
         }
 
-        // 완전 서 있는 자세(카메라 꽉 찰 정도)는 막기
         const STANDING_HEIGHT = 0.75;
         if (heightNorm > STANDING_HEIGHT) {
           return {
             ready: false,
             message:
-              "지금은 서 있는 자세에 가까워요. 몸을 더 낮춰서 푸쉬업 준비자세를 만들어 주세요.",
+              "지금은 서 있는 자세에 가깝습니다. 몸을 더 낮춰서 푸쉬업 준비자세를 만들어 주세요.",
           };
         }
 
-        // 최소 관절 몇 개만 보이면 OK
         const keyIdx = [11, 13, 15, 23, 25, 27];
         let visibleCnt = 0;
         for (const idx of keyIdx) {
@@ -251,11 +248,9 @@
         return { ready: true, message: "관절 인식 양호" };
       }
 
-      // 🔊 실시간 코칭 메시지
       function sendRealtimeCoach(mainMessage, detailMessage = "") {
         const now = Date.now();
         const COACH_COOLDOWN = 4000;
-
         if (now - lastCoachTime < COACH_COOLDOWN) return;
         lastCoachTime = now;
 
@@ -271,7 +266,6 @@
         }
       }
 
-      // 🔹 기준 각도 뽑기 (정자세 샘플)
       function exportReferenceAngles() {
         if (!lastAngles) return;
 
@@ -294,54 +288,66 @@
         }
       }
 
-      // 🔹 세트 동안 팔꿈치 각도 기록
       function recordElbowAngleForSet(angle) {
         if (!Number.isFinite(angle)) return;
         setElbowAngles.push(angle);
       }
 
-      // 🔹 세트 끝났을 때 팔꿈치 각도 기반 피드백
       function getElbowFeedbackText(angles) {
         if (!angles || angles.length === 0) {
-          return "이번 세트에서는 팔꿈치 각도 데이터를 충분히 얻지 못했어요. 다음 세트에서는 화면 중앙에서 조금만 더 또렷하게 움직여 볼까요?";
+          return "이번 세트에서는 팔꿈치 각도 데이터를 충분히 얻지 못했습니다. 다음 세트에서는 화면 중앙에서 조금만 더 또렷하게 움직여 보세요.";
         }
 
         const sum = angles.reduce((acc, v) => acc + v, 0);
         const avg = sum / angles.length;
 
         if (avg < IDEAL_ELBOW_MIN - 5) {
-          return "팔꿈치가 몸통에 너무 가깝게 붙어 있어요. 손 간격을 살짝 더 넓히고, 팔꿈치가 옆으로 조금 더 벌어지도록 해 주세요.";
+          return "팔꿈치가 몸통에 너무 가깝게 붙어 있습니다. 손 간격을 살짝 더 넓히고, 팔꿈치가 옆으로 조금 더 벌어지도록 해 주세요.";
         }
         if (avg > IDEAL_ELBOW_MAX + 5) {
-          return "팔이 조금 많이 벌어져 있어요. 손 간격을 어깨너비 정도로 좁히고, 팔꿈치가 몸통에서 45도 정도만 벌어지도록 맞춰 보세요.";
+          return "팔이 조금 많이 벌어져 있습니다. 손 간격을 어깨너비 정도로 좁히고, 팔꿈치가 몸통에서 45도 정도만 벌어지도록 맞춰 보세요.";
         }
 
-        return "팔꿈치 각도는 전반적으로 좋은 편이에요! 지금 느낌을 기억하면서 다음 세트도 같은 폭으로 유지해 보세요.";
+        return "팔꿈치 각도는 전반적으로 좋은 편입니다. 지금 느낌을 유지하면서 다음 세트도 같은 폭으로 유지해 보세요.";
       }
 
-      // 🔹 세트 요약 피드백 (부모 React로 전송)
-      function postSetFeedbackToParent() {
+            function postSetFeedbackToParent() {
+        // 이번 세트에서 실제 수행한 횟수
         const total =
           repsInCurrentSet || goodRepsInSet + badRepsInSet || 1;
-        const qualityRate = Math.round(
-          (goodRepsInSet / (goodRepsInSet + badRepsInSet || 1)) * 100
-        );
-        const score = qualityRate;
-        lastSetScore = score; // ✅ 영상 업로드용으로 저장
 
-        const mainMessage = `${currentSetIndex}세트 (${total}회) 완료! 수고하셨어요 👏`;
+        // 1) 자세(폼) 점수: 좋은 자세 비율
+        const qualityRatio =
+          goodRepsInSet / ((goodRepsInSet + badRepsInSet) || 1); // 0~1
+        const qualityScore = qualityRatio * 100; // 0~100
 
-        const baseSummary = `정자세(좋은 자세) : ${goodRepsInSet}회
-보완이 필요한 동작 : ${badRepsInSet}회`;
+        // 2) 볼륨(횟수) 점수: 목표 대비 몇 % 했는지
+        //    예) 목표 10회 중 1회 → 0.1, 5회 → 0.5, 10회 이상이면 1로 고정
+        const volumeRatio = Math.min(
+          total / (targetRepsPerSet || 1),
+          1
+        ); // 0~1
+        const volumeScore = volumeRatio * 100; // 0~100
+
+        // 3) 최종 점수: 폼 70% + 볼륨 30% (원하면 비율 조절해도 됨)
+        const rawScore =
+          qualityScore * 0.7 + volumeScore * 0.3;
+        const score = Math.round(rawScore);
+        lastSetScore = score;
+
+        const mainMessage = `${currentSetIndex}세트 (${total}회) 완료했습니다. 수고하셨습니다.`;
+
+        const baseSummary = `정자세(좋은 자세): ${goodRepsInSet}회
+보완이 필요한 동작: ${badRepsInSet}회`;
 
         let detailMessage = "";
 
         if (badRepsInSet === 0) {
           detailMessage = `${baseSummary}
 
-이번 세트에서는 거의 모든 동작을 안정적인 자세로 수행하셨어요 👍
+이번 세트에서는 대부분의 동작을 안정적인 자세로 수행했습니다.
 팔꿈치 각도와 몸의 라인도 전체적으로 잘 유지되었습니다.
-지금 느낌을 그대로 기억해서 다음 세트도 같은 리듬으로 이어가 볼까요?`;
+지금 느낌을 그대로 기억해서 다음 세트도 같은 리듬으로 이어가 보세요.`;
         } else {
           const elbowFeedback = getElbowFeedbackText(setElbowAngles);
 
@@ -349,7 +355,7 @@
 
 ${elbowFeedback}
 가슴은 바닥 쪽으로 조금 더 내려가되, 허리와 엉덩이가 과하게 꺼지지 않도록
-어깨–엉덩이–발목이 한 줄에 가깝게 유지되는 느낌으로 해 주세요.`;
+어깨–엉덩이–발목이 한 줄에 가깝게 유지되도록 해 주세요.`;
         }
 
         if (window.parent && window.parent !== window) {
@@ -365,10 +371,11 @@ ${elbowFeedback}
           );
         }
 
-        statusInfo.textContent = `${currentSetIndex}세트 완료! 잠시 호흡을 정리한 뒤 다음 세트를 준비해 주세요.`;
+        statusInfo.textContent = `${currentSetIndex}세트가 끝났습니다. 잠시 호흡을 정리한 뒤 다음 세트를 준비해 주세요.`;
       }
 
-      // 🔍 잘못된 자세 체크(허리 꺼짐 / 엉덩이 들림)
+
+      // 🔍 허리 꺼짐 / 엉덩이 들림 체크
       function checkFormErrors(landmarks, elbowAngle, bodyStraightAngle) {
         const leftShoulder = landmarks[11];
         const rightShoulder = landmarks[12];
@@ -388,10 +395,14 @@ ${elbowFeedback}
           return;
         }
 
-        // 몸이 거의 일직선이면 굳이 경고 안 띄움
-        if (!bodyStraightAngle || bodyStraightAngle >= 170) {
+        // 몸 라인이 대략 괜찮으면(160° 이상) 경고 안 띄움
+        if (!bodyStraightAngle || bodyStraightAngle >= 160) {
           return;
         }
+
+        // 상단 구간에서만 허리/엉덩이 체크 (팔이 거의 펴졌을 때)
+        const isTopPhase = elbowAngle >= 140;
+        if (!isTopPhase) return;
 
         const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
         const hipY = (leftHip.y + rightHip.y) / 2;
@@ -400,27 +411,34 @@ ${elbowFeedback}
         const midBodyY = (shoulderY + ankleY) / 2;
         const diff = hipY - midBodyY;
 
-        // 기준 완화: 0.03 → 0.06
-        const THRESH = 0.06;
+        const THRESH_WARN = 0.1;
+        const THRESH_ERROR = 0.18;
 
-        const isTopPhase = elbowAngle >= 140;
-        if (!isTopPhase) return;
-
-        if (diff > THRESH) {
+        if (diff > THRESH_ERROR) {
           sendRealtimeCoach(
-            "허리가 조금 아래로 꺼져 있어요.",
-            "배와 허리를 살짝 끌어올려서 어깨부터 발까지가 일직선이 되도록 만들어 주세요."
+            "허리가 많이 아래로 내려가 있습니다.",
+            "배와 허리를 끌어올려서 어깨부터 발까지가 한 줄에 가깝도록 맞춰 주세요."
           );
-        } else if (diff < -THRESH) {
+        } else if (diff > THRESH_WARN) {
           sendRealtimeCoach(
-            "엉덩이가 조금 너무 올라갔어요.",
-            "엉덩이를 살짝 내려서 어깨, 엉덩이, 발목이 한 줄이 되도록 맞춰볼게요."
+            "허리가 조금 아래로 내려가 있습니다.",
+            "몸통을 조금만 더 끌어올려서 일직선에 가깝게 맞춰 주세요."
+          );
+        } else if (diff < -THRESH_ERROR) {
+          sendRealtimeCoach(
+            "엉덩이가 많이 올라가 있습니다.",
+            "엉덩이를 내려서 어깨, 엉덩이, 발목이 한 줄에 가깝도록 맞춰 주세요."
+          );
+        } else if (diff < -THRESH_WARN) {
+          sendRealtimeCoach(
+            "엉덩이가 조금 올라가 있습니다.",
+            "엉덩이를 조금만 내려서 몸 라인을 정리해 주세요."
           );
         }
       }
 
       // ===========================
-      // 🎥 세트 영상 녹화 + 업로드
+      // 세트 영상 녹화 + 업로드
       // ===========================
       let mediaRecorder = null;
       let recordedChunks = [];
@@ -437,7 +455,7 @@ ${elbowFeedback}
 
         const stream = videoEl.srcObject;
         if (!stream) {
-          console.warn("🎥 srcObject 없음, 녹화 시작 불가");
+          console.warn("영상 스트림이 없어 녹화를 시작할 수 없습니다.");
           return;
         }
 
@@ -468,7 +486,6 @@ ${elbowFeedback}
             const formData = new FormData();
             formData.append("video", blob, "pushup-set.webm");
 
-            // ✅ 5000번 포트로 통일
             const res = await fetch(
               "http://localhost:5000/api/upload-video",
               {
@@ -477,8 +494,22 @@ ${elbowFeedback}
               }
             );
 
+            if (!res.ok) {
+              console.error(
+                "세트 영상 업로드 실패(res.ok=false):",
+                res.status
+              );
+              return;
+            }
+
             const data = await res.json();
-            console.log("🎥 세트 영상 업로드 완료:", data);
+
+            if (!data || !data.videoUrl) {
+              console.error("세트 영상 업로드 응답에 videoUrl 없음:", data);
+              return;
+            }
+
+            console.log("세트 영상 업로드 완료:", data.videoUrl);
 
             if (window.parent && window.parent !== window) {
               window.parent.postMessage(
@@ -493,14 +524,14 @@ ${elbowFeedback}
               );
             }
           } catch (err) {
-            console.error("❌ 세트 영상 업로드 실패:", err);
+            console.error("세트 영상 업로드 실패(catch):", err);
           }
         };
 
         mediaRecorder.start();
         isRecording = true;
         recordingStartedForCurrentSet = true;
-        console.log("🎥 녹화 시작");
+        console.log("세트 녹화 시작");
       }
 
       function stopRecordingAndUpload(setIndex, reps, score) {
@@ -510,26 +541,23 @@ ${elbowFeedback}
         lastUploadScore = score ?? null;
         isRecording = false;
         mediaRecorder.stop();
-        console.log("🎥 녹화 중지, 업로드 시작");
+        console.log("세트 녹화 중지, 업로드 시작");
       }
 
-      // 🔹 세트 완료 체크
       function checkSetComplete() {
         if (repsInCurrentSet >= targetRepsPerSet) {
           const finishedSetIndex = currentSetIndex;
           const finishedReps = repsInCurrentSet;
 
-          // 1) 세트 피드백 (점수 계산 + lastSetScore 갱신)
+          // ✅ 세트 목표 채웠을 때: 요약 피드백 + 녹화 종료/업로드
           postSetFeedbackToParent();
 
-          // 2) 영상 녹화 중지 + 업로드
           stopRecordingAndUpload(
             finishedSetIndex,
             finishedReps,
             lastSetScore
           );
 
-          // 3) 다음 세트 준비
           currentSetIndex += 1;
           repsInCurrentSet = 0;
           goodRepsInSet = 0;
@@ -547,19 +575,14 @@ ${elbowFeedback}
         }
       }
 
-      // =====================================================
-      // onResults : 웹캠 + 가이드라인 + 스켈레톤 + 근육 하이라이트
-      // =====================================================
       function onResults(results) {
         ctx.save();
         ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
-        // 1) 웹캠 영상
         if (results.image) {
           ctx.drawImage(results.image, 0, 0, canvasEl.width, canvasEl.height);
         }
 
-        // 2) 가이드라인 : 아직 캘리브레이션 안됐을 때만 보임
         const guideRect = getGuideRect();
         if (!calibrated && guideImg.complete) {
           ctx.save();
@@ -574,7 +597,6 @@ ${elbowFeedback}
           ctx.restore();
         }
 
-        // 3) 포즈 인식
         if (results.poseLandmarks) {
           const landmarks = results.poseLandmarks;
           lostPoseFrames = 0;
@@ -583,7 +605,6 @@ ${elbowFeedback}
           const elbowAngle = lastAngles.elbow_angle;
           const bodyStraight = lastAngles.body_straight_angle ?? 180;
 
-          // ===== 3-1. 기본 스켈레톤 =====
           ctx.save();
           ctx.globalAlpha = 0.8;
           window.drawConnectors(ctx, landmarks, window.POSE_CONNECTIONS, {
@@ -596,7 +617,6 @@ ${elbowFeedback}
           });
           ctx.restore();
 
-          // ===== 3-2. 운동 부위 하이라이트 =====
           let depthFactor = (DOWN_ELBOW_MAX + 20 - elbowAngle) / 40;
           depthFactor = Math.max(0, Math.min(1, depthFactor));
 
@@ -654,7 +674,7 @@ ${elbowFeedback}
             ctx.restore();
           }
 
-          // ===== 3-3. 캘리브레이션(초기 정자세 맞추기) =====
+          // ================= 캘리브레이션 =================
           if (!calibrated) {
             const poseInfo = checkPoseReady(landmarks);
 
@@ -671,17 +691,15 @@ ${elbowFeedback}
             if (elbowOk && bodyOk) {
               readyPoseFrames++;
               statusInfo.textContent =
-                "상태: 좋습니다! 잠시만 그 자세를 유지해 주세요.";
+                "상태: 좋습니다. 이 자세를 잠시 유지해 주세요.";
 
-              // 약 2초 유지되면 준비 완료 + 이 시점에서 녹화 시작
               if (readyPoseFrames >= 60) {
                 calibrated = true;
                 statusInfo.textContent =
-                  "상태: 준비 완료 · 이제 카운트 시작합니다!";
+                  "상태: 준비 완료. 이제 카운트를 시작합니다.";
 
-                // ✅ 카운트 ON 상태라면, 가이드라인 사라지는 순간부터 세트 녹화 시작
                 if (countingEnabled && !isRecording) {
-                  console.log("🎥 가이드 사라짐 → 녹화 시작");
+                  console.log("가이드 사라짐 → 녹화 시작");
                   startRecordingIfPossible();
                 }
               }
@@ -697,7 +715,7 @@ ${elbowFeedback}
             }
           }
 
-          // ===== 3-4. 카운트 / 코칭 로직 =====
+          // ================= 카운트 / 코칭 =================
           const leftShoulder = landmarks[11];
           const leftElbow = landmarks[13];
           const leftWrist = landmarks[15];
@@ -725,7 +743,7 @@ ${elbowFeedback}
             }
 
             if (!countingEnabled) {
-              statusInfo.textContent = `상태: 준비 완료 · 팔꿈치 ${elbowAngle.toFixed(
+              statusInfo.textContent = `상태: 준비 완료. 팔꿈치 ${elbowAngle.toFixed(
                 1
               )}°`;
             } else {
@@ -737,7 +755,7 @@ ${elbowFeedback}
               if (phase === "up" && isDownPose) {
                 phase = "down";
                 minAngleThisRep = elbowAngle;
-                statusInfo.textContent = `상태: 아래로 이동 중 · 팔꿈치 ${elbowAngle.toFixed(
+                statusInfo.textContent = `상태: 아래로 이동 중. 팔꿈치 ${elbowAngle.toFixed(
                   1
                 )}°`;
               } else if (phase === "down") {
@@ -756,50 +774,54 @@ ${elbowFeedback}
                     recordElbowAngleForSet(minAngleThisRep);
 
                     countInfo.textContent = `반복 횟수: ${repsInCurrentSet}회`;
-                    statusInfo.textContent = `상태: 위(1회 완료) · 팔꿈치 ${elbowAngle.toFixed(
+                    statusInfo.textContent = `상태: 위(1회 완료). 팔꿈치 ${elbowAngle.toFixed(
                       1
                     )}°`;
 
                     const goodDepth =
                       minAngleThisRep <= DOWN_ELBOW_MAX - 10;
-                    if (goodDepth) {
+
+                    const bodyOkNow = bodyStraight >= 160;
+
+                    if (goodDepth && bodyOkNow) {
                       goodRepsInSet += 1;
                       exportReferenceAngles();
 
                       if (Math.random() < 0.3) {
                         sendRealtimeCoach(
-                          "좋아요, 깊이 아주 좋습니다.",
-                          "지금처럼 가슴을 충분히 내려주면 가슴과 삼두에 자극이 잘 들어갑니다."
+                          "좋아요, 깊이도 자세도 좋습니다.",
+                          "지금처럼 가슴을 충분히 내리면서도 몸 라인을 잘 유지해 주세요."
                         );
                       }
                     } else {
                       badRepsInSet += 1;
 
-                      sendRealtimeCoach(
-                        "조금만 더 깊게 내려가 볼까요?",
-                        "팔꿈치 각도가 아직 충분히 접히지 않았어요. 가슴이 바닥 쪽으로 조금 더 가까워지도록 해 보세요."
-                      );
+                      if (!goodDepth) {
+                        sendRealtimeCoach(
+                          "조금만 더 깊게 내려가 보세요.",
+                          "팔꿈치가 더 접히도록 가슴을 바닥 쪽으로 조금 더 내려주세요."
+                        );
+                      }
                     }
 
                     minAngleThisRep = 999;
                     checkSetComplete();
                   }
                 } else {
-                  statusInfo.textContent = `상태: 아래 자세 유지 · 팔꿈치 ${elbowAngle.toFixed(
-                    1
-                  )}°`;
+                  // ✅ 자세 좋을 때 문구
+                  statusInfo.textContent =
+                    "상태: 자세 좋습니다. 자세를 유지해 주세요.";
                 }
               } else {
-                statusInfo.textContent = `상태: 이동 중 · 팔꿈치 ${elbowAngle.toFixed(
+                statusInfo.textContent = `상태: 이동 중. 팔꿈치 ${elbowAngle.toFixed(
                   1
                 )}°`;
               }
             }
           } else {
-            statusInfo.textContent = "상태: 자세 인식 중...";
+            statusInfo.textContent = "상태: 자세 인식 중입니다.";
           }
         } else {
-          // 포즈 자체가 없는 프레임
           lostPoseFrames++;
 
           if (calibrated && lostPoseFrames > 60) {
@@ -807,16 +829,15 @@ ${elbowFeedback}
             readyPoseFrames = 0;
             recordingStartedForCurrentSet = false;
             statusInfo.textContent =
-              "상태: 자세가 오래 인식되지 않았어요. 가이드에 다시 맞춰 주세요.";
+              "상태: 자세가 오래 인식되지 않았습니다. 가이드에 다시 맞춰 주세요.";
           } else if (!calibrated) {
-            statusInfo.textContent = "상태: 자세 인식 중 ...";
+            statusInfo.textContent = "상태: 자세 인식 중입니다.";
           }
         }
 
         ctx.restore();
       }
 
-      // MediaPipe Pose 세팅
       const pose = new window.Pose({
         locateFile: (file) =>
           `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`,
@@ -832,14 +853,13 @@ ${elbowFeedback}
 
       pose.onResults(onResults);
 
-      // 🔹 카메라만 켜는 함수
       async function startCameraInternal() {
         if (camera) {
-          console.log("📷 이미 카메라가 시작됨");
+          console.log("이미 카메라가 시작된 상태입니다.");
           return;
         }
 
-        statusInfo.textContent = "상태: 카메라 준비 중...";
+        statusInfo.textContent = "상태: 카메라 준비 중입니다...";
 
         try {
           camera = new window.Camera(videoEl, {
@@ -851,10 +871,10 @@ ${elbowFeedback}
           });
 
           await camera.start();
-          statusInfo.textContent = "상태: 인식 중...";
-          console.log("✅ 카메라 시작 성공");
+          statusInfo.textContent = "상태: 인식 중입니다.";
+          console.log("카메라 시작 성공");
         } catch (err) {
-          console.error("❌ 카메라 시작 실패:", err);
+          console.error("카메라 시작 실패:", err);
           statusInfo.textContent =
             "카메라 권한을 허용했는지 확인해 주세요 (주소창의 카메라 아이콘).";
           alert(
@@ -863,7 +883,6 @@ ${elbowFeedback}
         }
       }
 
-      // 🔹 카운트 상태 초기화 + 카운트 ON
       function startCounting() {
         countingEnabled = true;
         phase = "up";
@@ -889,13 +908,13 @@ ${elbowFeedback}
 
         countInfo.textContent = "반복 횟수: 0회";
         setInfo.textContent = `세트: ${currentSetIndex}세트 진행 중 (세트당 ${targetRepsPerSet}회)`;
-        statusInfo.textContent = "상태: 인식 중...";
+        statusInfo.textContent = "상태: 인식 중입니다.";
 
         if (window.parent && window.parent !== window) {
           window.parent.postMessage(
             {
               type: "STEPUP_REALTIME",
-              mainMessage: `${currentSetIndex}세트 시작합니다. 천천히 첫 동작을 내려가 볼까요?`,
+              mainMessage: `${currentSetIndex}세트를 시작합니다. 천천히 첫 동작을 내려가 보세요.`,
               detailMessage: "",
             },
             "*"
@@ -903,57 +922,67 @@ ${elbowFeedback}
         }
       }
 
-      // 🔹 React에서 직접 호출할 수 있게 전역 노출
       window.startCamera = function () {
         startCounting();
         startCameraInternal();
       };
 
-      // ✅ 분석 중지(중간 STOP) 처리용 함수
       function stopAnalysisNow() {
-        console.log("⏹ 수동 분석 중지 요청");
-        // 더 이상 카운트/코칭 안 하도록
+        console.log("수동 분석 중지 요청");
         countingEnabled = false;
 
-        // 녹화 중이면 지금까지 영상 업로드
-        if (isRecording) {
-          const finishedSetIndex = currentSetIndex;
-          const finishedReps = repsInCurrentSet;
-          const finishedScore = lastSetScore;
+        // ✅ 최소 1회 이상 했으면: 세트 요약 피드백 + 녹화 종료/업로드
+        if (repsInCurrentSet > 0) {
+          // 1) 먼저 FEEDBACK(점수/문구) 생성해서 React(Pose.jsx)로 전송
+          postSetFeedbackToParent();
 
-          stopRecordingAndUpload(
-            finishedSetIndex,
-            finishedReps,
-            finishedScore
-          );
+          // 2) 세트 영상 녹화 중이면, 같은 세트 기록으로 업로드
+          if (isRecording) {
+            const finishedSetIndex = currentSetIndex;
+            const finishedReps = repsInCurrentSet;
+            const finishedScore = lastSetScore;
+
+            stopRecordingAndUpload(
+              finishedSetIndex,
+              finishedReps,
+              finishedScore
+            );
+          }
+        } else {
+          // 0회일 때는 예전처럼 영상만 정리(녹화 중이면 업로드)하고 피드백은 안 보냄
+          if (isRecording) {
+            stopRecordingAndUpload(currentSetIndex, repsInCurrentSet, lastSetScore);
+          }
         }
 
         statusInfo.textContent = "상태: 분석이 중지되었습니다.";
       }
 
-      // 🔹 React(Pose.jsx)에서 보내는 메시지 처리
       window.addEventListener("message", (event) => {
         if (!event.data || typeof event.data !== "object") return;
         const { type } = event.data;
 
         if (type === "STEPUP_START_CAMERA") {
-          console.log("▶ STEPUP_START_CAMERA 수신");
+          console.log("STEPUP_START_CAMERA 수신");
           startCounting();
           startCameraInternal();
         }
 
         if (type === "STEPUP_SET_TARGET") {
-          console.log("🎯 목표 세팅:", event.data);
+          console.log("목표 세팅:", event.data);
           targetSetsPerDay = event.data.setsPerDay ?? targetSetsPerDay;
           targetRepsPerSet = event.data.repsPerSet ?? targetRepsPerSet;
+
+          if (!targetRepsPerSet || targetRepsPerSet < 2) {
+            targetRepsPerSet = 10;
+          }
 
           setInfo.textContent = `세트: ${currentSetIndex}세트 진행 중 (세트당 ${targetRepsPerSet}회)`;
           modeInfo.textContent = `푸쉬업 모드 · 목표: ${targetSetsPerDay}세트 × ${targetRepsPerSet}회`;
         }
 
-        // ✅ Pose.jsx에서 오는 "분석 중지" 명령 처리
         if (type === "STEPUP_STOP_ANALYSIS") {
-          console.log("⏹ STEPUP_STOP_ANALYSIS 수신");
+          console.log("STEPUP_STOP_ANALYSIS 수신");
           stopAnalysisNow();
         }
       });

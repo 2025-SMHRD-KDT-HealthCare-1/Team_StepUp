@@ -3,11 +3,21 @@ import { useEffect, useState } from "react";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 import MainNav from "../components/MainNav";
-import { useNavigate } from "react-router-dom";
+// import { useNavigate } from "react-router-dom";
 
 // 댓글 이미지
 import comment from "../icon/comment.svg";
+import lockIcon from "../icon/lock.svg"
 const API_BASE = "http://localhost:5000";
+
+// media_url이 S3 전체 URL인지, 예전 /uploads 인지 구분해서 src 만들기
+const buildMediaSrc = (url) => {
+  if (!url) return "";
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url; // S3 전체 URL 그대로 사용
+  }
+  return `${API_BASE}${url}`; // 예전처럼 /uploads/... 인 경우만 서버 주소 붙이기
+};
 
 export default function Board() {
   const { user, nickname, role } = useAuth();
@@ -18,11 +28,14 @@ export default function Board() {
   // 글 목록
   const [posts, setPosts] = useState([]);
 
-  // 글쓰기 폼
+  // 글쓰기/수정 폼
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
+
+  // 업로드할 사진/영상 파일
+  const [mediaFile, setMediaFile] = useState(null);
 
   // 비밀글
   const [isSecret, setIsSecret] = useState(false);
@@ -37,14 +50,32 @@ export default function Board() {
 
   // 댓글
   const [comments, setComments] = useState({});
-  const [commentInput, setCommentInput] = useState("");
+  // 댓글 입력값 (게시글별)
+  const [commentInputs, setCommentInputs] = useState({});
+
+  // 현재 수정 중인 댓글 ID
+  const [editingCommentId, setEditingCommentId] = useState(null);
+
+  // 수정 중인 댓글 내용
+  const [editingCommentText, setEditingCommentText] = useState("");
+
 
   // 비밀글 비밀번호 입력값(게시글별)
   const [secretInputs, setSecretInputs] = useState({});
   // 비밀글 잠금 해제 여부(게시글별)
   const [unlockedPosts, setUnlockedPosts] = useState({});
 
-  // 🔹 탭이 바뀔 때마다 목록 불러오기
+  // 수정 모드
+  const [editMode, setEditMode] = useState(false);
+  const [editPost, setEditPost] = useState(null);
+
+  const [deleteMediaFlag, setDeleteMediaFlag] = useState(false);
+
+  const [editPreviewMedia, setEditPreviewMedia] = useState(null);
+
+
+
+  // 탭이 바뀔 때마다 목록 불러오기
   useEffect(() => {
     const load = async () => {
       try {
@@ -64,64 +95,146 @@ export default function Board() {
     load();
   }, [tab]);
 
-  // 🔹 작성자 / 관리자는 비밀번호 없이 비밀글 열 수 있게
+  // 작성자 / 관리자는 비밀번호 없이 비밀글 열 수 있게
   const canBypassSecret = (post) =>
     user && (user.uid === post.user_uid || role === "admin");
 
-  // 🔹 글 등록
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  // 수정 버튼 눌렀을 때 기존 글 데이터를 폼에 채우기
+  const openEditForm = (post) => {
+    setEditMode(true);
+    setEditPost(post);
+    setShowForm(true);
 
-    if (!user) {
-      alert("로그인이 필요합니다.");
-      return;
-    }
+    setTitle(post.board_title || post.title);
+    setContent(post.board_content || post.content);
+    setVideoUrl(post.video_url || "");
+    setIsSecret(post.is_secret === 1);
+    setSecretPassword(post.secret_password || "");
+    setMediaFile(null);
+    setEditPreviewMedia(post.media_url || null);
 
-    if (tab === "trainer" && role !== "trainer" && role !== "admin") {
-      alert("트레이너 회원만 홍보 글을 작성할 수 있습니다.");
-      return;
-    }
+  };
 
+// 글 등록 / 수정 (폼 전송)
+const handleSubmit = async (e) => {
+  e.preventDefault();
+
+  // ✅ 수정 모드일 경우 → PUT + FormData로 전송
+  if (editMode && editPost) {
     if (!title.trim() || !content.trim()) {
       alert("제목과 내용을 입력해주세요.");
       return;
     }
 
     try {
-      const body = {
-        userUid: user.uid,
-        nickname: nickname || user.email || "익명",
-        role: role || "user",
-        type: tab, // suggestion | trainer
-        title: title.trim(),
-        content: content.trim(),
-        isSecret,
-        secretPassword,
-        videoUrl: tab === "trainer" ? videoUrl.trim() : "",
-      };
+      const formData = new FormData();
+      formData.append("board_title", title.trim());
+      formData.append("board_content", content.trim());
+      formData.append("is_secret", isSecret ? "1" : "0");
+      formData.append("secret_password", secretPassword || "");
+      formData.append("video_url", videoUrl.trim());
 
-      await axios.post(`${API_BASE}/api/board/write`, body);
+      if (deleteMediaFlag) formData.append("deleteMedia", "1");
+      else formData.append("deleteMedia", "0");
 
-      // 폼 초기화
+
+      // 🔥 사진/영상 파일을 새로 선택한 경우에만 서버로 보냄
+      if (mediaFile) {
+        formData.append("media", mediaFile); // 백엔드 upload.single("media")랑 이름 맞추기
+      }
+
+      await axios.put(`${API_BASE}/api/board/${editPost.id}`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
+
+      alert("게시글이 수정되었습니다.");
+
+      // 초기화
+      setEditMode(false);
+      setEditPost(null);
+      setShowForm(false);
       setTitle("");
       setContent("");
       setVideoUrl("");
       setIsSecret(false);
       setSecretPassword("");
-      setShowForm(false);
+      setMediaFile(null);
 
-      // 목록 다시 불러오기
       const res = await axios.get(`${API_BASE}/api/board/list`, {
         params: { type: tab },
       });
       setPosts(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      console.error("게시글 저장 오류:", err);
-      alert("게시글 저장 중 오류가 발생했습니다.");
-    }
-  };
 
-  // 🔹 게시글 토글 (열기/닫기) + 댓글 불러오기
+      return; // 아래 신규 작성 로직 실행 안 하도록
+    } catch (err) {
+      console.error("수정 오류:", err);
+      alert("게시글 수정 중 오류가 발생했습니다.");
+      return;
+    }
+  }
+
+  // 🔽 여기서부터는 "신규 작성" 로직
+
+  // 로그인 체크
+  if (!user) {
+    alert("로그인이 필요합니다.");
+    return;
+  }
+
+  // 트레이너 게시판 권한 체크
+  if (tab === "trainer" && role !== "trainer" && role !== "admin") {
+    alert("트레이너 회원만 홍보 글을 작성할 수 있습니다.");
+    return;
+  }
+
+  if (!title.trim() || !content.trim()) {
+    alert("제목과 내용을 입력해주세요.");
+    return;
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append("userUid", user.uid);
+    formData.append("nickname", nickname || user.email || "익명");
+    formData.append("role", role || "user");
+    formData.append("type", tab); // suggestion | trainer
+    formData.append("title", title.trim());
+    formData.append("content", content.trim());
+    formData.append("isSecret", isSecret ? "1" : "0");
+    formData.append("secretPassword", secretPassword || "");
+    formData.append("videoUrl", tab === "trainer" ? videoUrl.trim() : "");
+
+    if (mediaFile) {
+      // 서버 app.js 의 upload.single("media") 와 이름 맞추기
+      formData.append("media", mediaFile);
+    }
+
+    await axios.post(`${API_BASE}/api/board/write`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+
+    // 폼 초기화
+    setTitle("");
+    setContent("");
+    setVideoUrl("");
+    setIsSecret(false);
+    setSecretPassword("");
+    setMediaFile(null);
+    setShowForm(false);
+
+    // 목록 다시 불러오기
+    const res = await axios.get(`${API_BASE}/api/board/list`, {
+      params: { type: tab },
+    });
+    setPosts(Array.isArray(res.data) ? res.data : []);
+  } catch (err) {
+    console.error("게시글 저장 오류:", err);
+    alert("게시글 저장 중 오류가 발생했습니다.");
+  }};
+
+  // 게시글 토글 (열기/닫기) + 댓글 불러오기
   const togglePost = async (postId) => {
     if (openPostId === postId) {
       setOpenPostId(null);
@@ -131,39 +244,132 @@ export default function Board() {
     setOpenPostId(postId);
 
     try {
-      const res = await axios.get(
-        `${API_BASE}/api/board/${postId}/comments`
-      );
+      const res = await axios.get(`${API_BASE}/api/board/${postId}/comments`);
       setComments((prev) => ({ ...prev, [postId]: res.data }));
     } catch (err) {
       console.error("댓글 불러오기 오류:", err);
     }
   };
 
-  // 🔹 댓글 등록
+  // 댓글 등록 (게시글별 입력값 사용)
   const submitComment = async (postId) => {
-    if (!commentInput.trim()) return;
+    const text = (commentInputs[postId] || "").trim();
+    if (!text) return;
+
+    if (!user) {
+      alert("로그인이 필요합니다.");
+      return;
+    }
 
     try {
       await axios.post(`${API_BASE}/api/board/${postId}/comment`, {
         userUid: user.uid,
         nickname,
-        content: commentInput,
+        role,
+        content: text,
       });
 
-      setCommentInput("");
+      // 해당 게시글 댓글 입력값만 비우기
+      setCommentInputs((prev) => ({
+        ...prev,
+        [postId]: "",
+      }));
 
-      const res = await axios.get(
-        `${API_BASE}/api/board/${postId}/comments`
-      );
+      const res = await axios.get(`${API_BASE}/api/board/${postId}/comments`);
       setComments((prev) => ({ ...prev, [postId]: res.data }));
     } catch (err) {
       console.error("댓글 등록 오류:", err);
       alert("댓글 등록 중 오류가 발생했습니다.");
     }
   };
+// 댓글 수정 기능
 
-  // 🔹 비밀글 잠금 해제 (비밀번호 비교)
+// 댓글 수정 시작
+const startEditComment = (comment) => {
+  setEditingCommentId(comment.id);
+  setEditingCommentText(comment.content);
+};
+
+// 댓글 수정 취소
+const cancelEditComment = () => {
+  setEditingCommentId(null);
+  setEditingCommentText("");
+};
+
+// 댓글 수정 저장
+const saveEditComment = async (postId) => {
+  if (!editingCommentId) return;
+  const text = editingCommentText.trim();
+  if (!text) {
+    alert("댓글 내용을 입력해주세요.");
+    return;
+  }
+
+  if (!user) {
+    alert("로그인이 필요합니다.");
+    return;
+  }
+
+  try {
+    await axios.put(
+      `${API_BASE}/api/board/${postId}/comment/${editingCommentId}`,
+      {
+        userUid: user.uid,
+        role: role || "user",
+        content: text,
+      }
+    );
+
+    const res = await axios.get(
+      `${API_BASE}/api/board/${postId}/comments`
+    );
+    setComments((prev) => ({ ...prev, [postId]: res.data }));
+
+    setEditingCommentId(null);
+    setEditingCommentText("");
+  } catch (err) {
+    console.error("댓글 수정 오류:", err);
+    alert("댓글 수정 중 오류가 발생했습니다.");
+  }
+};
+
+// 댓글 삭제
+const deleteComment = async (postId, commentId) => {
+  if (!user) {
+    alert("로그인이 필요합니다.");
+    return;
+  }
+
+  const ok = window.confirm("이 댓글을 삭제하시겠습니까?");
+  if (!ok) return;
+
+  try {
+    await axios.delete(
+      `${API_BASE}/api/board/${postId}/comment/${commentId}`,
+      {
+        data: {
+          userUid: user.uid,
+          role: role || "user",
+        },
+      }
+    );
+
+    const res = await axios.get(
+      `${API_BASE}/api/board/${postId}/comments`
+    );
+    setComments((prev) => ({ ...prev, [postId]: res.data }));
+
+    if (editingCommentId === commentId) {
+      setEditingCommentId(null);
+      setEditingCommentText("");
+    }
+  } catch (err) {
+    console.error("댓글 삭제 오류:", err);
+    alert("댓글 삭제 중 오류가 발생했습니다.");
+  }
+};
+
+  // 비밀글 잠금 해제 (비밀번호 비교)
   const handleUnlockPost = (post) => {
     const inputPw = (secretInputs[post.id] || "").trim();
 
@@ -180,7 +386,7 @@ export default function Board() {
     }
   };
 
-  // 🔹 날짜 포맷
+  // 날짜 포맷
   const formatDate = (val) => {
     if (!val) return "";
     try {
@@ -190,7 +396,7 @@ export default function Board() {
     }
   };
 
-  // 🔹 삭제 버튼 클릭
+  // 삭제 버튼 클릭
   const handleClickDeletePost = (post) => {
     if (!user) {
       alert("로그인이 필요합니다.");
@@ -206,13 +412,13 @@ export default function Board() {
     setShowDeleteConfirm(true);
   };
 
-  // 🔹 삭제 취소
+  // 삭제 취소
   const handleCancelDelete = () => {
     setShowDeleteConfirm(false);
     setTargetPost(null);
   };
 
-  // 🔹 삭제 확정
+  // 삭제 확정
   const handleConfirmDelete = async () => {
     if (!targetPost || !user) return;
 
@@ -224,7 +430,6 @@ export default function Board() {
         },
       });
 
-      // 목록 갱신
       const res = await axios.get(`${API_BASE}/api/board/list`, {
         params: { type: tab },
       });
@@ -266,7 +471,10 @@ export default function Board() {
         >
           <div style={{ display: "flex", gap: 8 }}>
             <button
-              onClick={() => setTab("suggestion")}
+              onClick={() => {
+                setTab("suggestion");
+                setOpenPostId(null);
+              }}
               style={{
                 padding: "8px 16px",
                 borderRadius: 999,
@@ -278,10 +486,13 @@ export default function Board() {
                 fontWeight: 500,
               }}
             >
-              건의 · 요청
+              자유게시판
             </button>
             <button
-              onClick={() => setTab("trainer")}
+              onClick={() => {
+                setTab("trainer");
+                setOpenPostId(null);
+              }}
               style={{
                 padding: "8px 16px",
                 borderRadius: 999,
@@ -299,7 +510,20 @@ export default function Board() {
 
           {user && (
             <button
-              onClick={() => setShowForm((prev) => !prev)}
+              onClick={() => {
+                // 작성 취소 시 수정 모드도 초기화
+                if (showForm) {
+                  setEditMode(false);
+                  setEditPost(null);
+                  setTitle("");
+                  setContent("");
+                  setVideoUrl("");
+                  setIsSecret(false);
+                  setSecretPassword("");
+                  setMediaFile(null);
+                }
+                setShowForm((prev) => !prev);
+              }}
               style={{
                 padding: "8px 16px",
                 borderRadius: 999,
@@ -328,7 +552,7 @@ export default function Board() {
           </div>
         )}
 
-        {/* 글쓰기 폼 */}
+        {/* 글쓰기 / 수정 폼 */}
         {user && showForm && (
           <form
             onSubmit={handleSubmit}
@@ -343,7 +567,7 @@ export default function Board() {
             <div style={{ fontSize: 14, marginBottom: 8 }}>
               {tab === "suggestion"
                 ? "서비스에 대한 건의사항·요청사항을 남겨주세요."
-                : "트레이너 홍보 글을 작성해주세요. (영상 URL을 함께 등록할 수 있습니다.)"}
+                : "트레이너 홍보 글을 작성해주세요. (영상 URL 또는 파일을 함께 등록할 수 있습니다.)"}
             </div>
 
             <input
@@ -391,6 +615,71 @@ export default function Board() {
                 }}
               />
             )}
+
+            {/* 사진/동영상 파일 업로드 (선택) */}
+            <div
+              style={{
+                marginBottom: 8,
+                fontSize: 12,
+                color: "#555",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              <span>사진 또는 동영상 파일 (선택)</span>
+              <input
+                type="file"
+                accept="image/*,video/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  setMediaFile(file || null);
+                }}
+              />
+              {editMode && editPost?.media_url && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteMediaFlag(true);
+                    setMediaFile(null);
+                    alert("기존 이미지를 삭제합니다.");
+                  }}
+                  style={{
+                    marginTop: 4,
+                    padding: "4px 10px",
+                    background: "#e53935",
+                    color: "#fff",
+                    borderRadius: 8,
+                    border: "none",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    width: "fit-content",
+                  }}
+                >
+                  기존 이미지 삭제하기
+                </button>
+              )}
+              {/* 수정 모드 + 기존 이미지가 있는 경우 → 미리보기 */}
+{editMode && editPreviewMedia && (
+  <div style={{ marginBottom: 10 }}>
+    {/\.(mp4|webm|ogg|mov)$/i.test(editPreviewMedia) ? (
+      <video
+        controls
+        style={{ maxWidth: "100%", borderRadius: 8 }}
+        src={buildMediaSrc(editPreviewMedia)}
+      />
+    ) : (
+      <img
+        alt="기존 첨부 이미지"
+        style={{ maxWidth: "100%", borderRadius: 8 }}
+        src={buildMediaSrc(editPreviewMedia)}
+      />
+    )}
+  </div>
+)}
+
+
+            </div>
 
             {/* 비밀글 설정 */}
             <div
@@ -444,11 +733,11 @@ export default function Board() {
                   border: "none",
                   background: "#000",
                   color: "#fff",
-                  fontSize: 13,
+                  fontSize: 15,
                   cursor: "pointer",
                 }}
               >
-                게시글 등록
+                {editMode ? "게시글 수정" : "게시글 등록"}
               </button>
             </div>
           </form>
@@ -499,9 +788,16 @@ export default function Board() {
                         background: "#020024",
                         color: "#fff",
                         fontWeight: 500,
+                        display: "flex",
+                        alignItems: "center"
                       }}
                     >
-                      🔒비밀
+                      <img
+                      src={lockIcon}
+                      alt="lock"
+                      style={{ width: "18px", height: "15px" }}
+                      />
+                      비밀
                     </span>
                   )}
 
@@ -517,50 +813,72 @@ export default function Board() {
                     {post.title}
                   </span>
 
-                  {/* 영상 포함 배지 */}
-                  {post.type === "trainer" && post.video_url && (
-                    <span
-                      style={{
-                        fontSize: 10,
-                        padding: "2px 6px",
-                        borderRadius: 999,
-                        background: "#ff7043",
-                        color: "#fff",
-                        cursor: "pointer",
-                      }}
-                    >
-                      영상 포함
-                    </span>
-                  )}
-
-                  {/* 삭제 버튼 */}
-                  {user &&
-                    (user.uid === post.user_uid || role === "admin") && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleClickDeletePost(post);
-                        }}
+                  {/* 영상 포함 배지 (URL 기준) */}
+                  {post.type === "trainer" &&
+                    (post.video_url || post.media_url) && (
+                      <span
                         style={{
-                          marginLeft: 8,
-                          padding: "3px 8px",
+                          fontSize: 12,
+                          padding: "2px 6px",
                           borderRadius: 999,
-                          border: "none",
-                          background: "#e53935",
+                          background: "#ff7043",
                           color: "#fff",
-                          fontSize: 11,
                           cursor: "pointer",
                         }}
                       >
-                        삭제
-                      </button>
+                        영상/미디어 포함
+                      </span>
+                    )}
+
+                  {/* 삭제/수정 버튼 */}
+                  {user &&
+                    (user.uid === post.user_uid || role === "admin") && (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleClickDeletePost(post);
+                          }}
+                          style={{
+                            marginLeft: 8,
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            border: "none",
+                            background: "#e53935",
+                            color: "#fff",
+                            fontSize: 11,
+                            cursor: "pointer",
+                          }}
+                        >
+                          삭제
+                        </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditForm(post);
+                          }}
+                          style={{
+                            marginLeft: 6,
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            border: "none",
+                            background: "#1976d2",
+                            color: "#fff",
+                            fontSize: 11,
+                            cursor: "pointer",
+                          }}
+                        >
+                          수정
+                        </button>
+                      </>
                     )}
                 </div>
 
                 {/* 작성자/역할/시간 */}
                 <div
                   style={{
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: 500,
                     color: "#020024",
                     display: "flex",
@@ -569,8 +887,14 @@ export default function Board() {
                   }}
                 >
                   <span>{post.nickname}</span>
-                  <span>·</span>
-                  <span style={{ color: "#090979" }}>
+                  <span>|</span>
+                  <span style={{ color:
+                            post.role === "admin"
+                              ? "red"           
+                              : post.role === "trainer"
+                              ? "green"     
+                              : "blue",       
+                        }}>
                     {post.role === "trainer"
                       ? "트레이너"
                       : post.role === "admin"
@@ -579,7 +903,7 @@ export default function Board() {
                   </span>
                   {post.created_at && (
                     <>
-                      <span>·</span>
+                      <span>|</span>
                       <span>{formatDate(post.created_at)}</span>
                     </>
                   )}
@@ -597,7 +921,7 @@ export default function Board() {
                       fontSize: 13,
                     }}
                   >
-                    {/* 🔒 비밀글 + 잠금 안 풀림 + 작성자/관리자 아님 → 비밀번호 입력창 */}
+                    {/* 비밀글 + 잠금 안 풀림 + 작성자/관리자 아님 → 비밀번호 입력창 */}
                     {post.is_secret === 1 &&
                     !canBypassSecret(post) &&
                     !unlockedPosts[post.id] ? (
@@ -609,7 +933,7 @@ export default function Board() {
                             fontWeight: 600,
                           }}
                         >
-                          🔒 비밀글입니다.
+                          비밀글입니다.
                         </div>
                         <div
                           style={{
@@ -662,20 +986,36 @@ export default function Board() {
                       </div>
                     ) : (
                       <>
-                        {/* ✅ 잠금 해제된 비밀글 / 비밀글 아님 / 작성자·관리자 → 내용/댓글 보임 */}
+                        {/* 잠금 해제된 비밀글 / 비밀글 아님 / 작성자·관리자 → 내용/댓글 보임 */}
 
-                        {/* 본문 */}
-                        <div
-                          style={{
-                            marginBottom: 12,
-                            fontSize: 16,
-                            fontWeight: 600,
-                          }}
-                        >
-                          {post.content}
-                        </div>
+                        {/* 업로드된 사진/영상 */}
+                        {post.media_url && (
+                          <div style={{ marginBottom: 10, textAlign: "center" }}>
+                            {/\.(mp4|webm|ogg|mov)$/i.test(post.media_url) ? (
+                              <video
+                                controls
+                                style={{
+                                  width: "400px",
+                                  height: "auto",
+                                  borderRadius: 8,
+                                }}
+                                src={buildMediaSrc(post.media_url)}
+                              />
+                            ) : (
+                              <img
+                                alt="첨부 미디어"
+                                style={{
+                                  width: "400px",
+                                  height: "auto",
+                                  borderRadius: 8,
+                                }}
+                                src={buildMediaSrc(post.media_url)}
+                              />
+                            )}
+                          </div>
+                        )}
 
-                        {/* 영상(트레이너 게시판) */}
+                        {/* 외부 영상 URL(트레이너 게시판) */}
                         {post.video_url && (
                           <div style={{ marginBottom: 10 }}>
                             <a
@@ -683,10 +1023,23 @@ export default function Board() {
                               target="_blank"
                               rel="noreferrer"
                             >
-                              🎥 영상 보러가기
+                              외부 영상 보러가기
                             </a>
                           </div>
                         )}
+
+                        {/* 본문 */}
+                        <div
+                          style={{
+                            marginBottom: 12,
+                            fontSize: 16,
+                            fontWeight: 600,
+                            whiteSpace: "pre-line",
+                            textAlign: "center"
+                          }}
+                        >
+                          {post.content}
+                        </div>
 
                         {/* 댓글 목록 */}
                         <div
@@ -694,6 +1047,8 @@ export default function Board() {
                             fontWeight: 600,
                             marginBottom: 6,
                             fontSize: 16,
+                            display: "flex",
+                            alignItems: "center"
                           }}
                         >
                           <img
@@ -703,15 +1058,164 @@ export default function Board() {
                           />
                           &nbsp;댓글
                         </div>
-                        {(comments[post.id] || []).map((c) => (
-                          <div
-                            key={c.id}
-                            style={{ fontSize: 13, marginBottom: 4 }}
-                          >
-                            <b style={{ fontWeight: 600 }}>{c.nickname}</b> :{" "}
-                            {c.content}
-                          </div>
-                        ))}
+
+                        {(comments[post.id] || []).map((c) => {
+                          const isOwnerOrAdmin =
+                            user &&
+                            (user.uid === c.user_uid || role === "admin");
+
+                          const isEditing = editingCommentId === c.id;
+                          return (
+                            <div
+                              key={c.id}
+                              style={{
+                                fontSize: 15,
+                                marginBottom: 6,
+                                padding: "4px 6px",
+                                borderRadius: 6,
+                                background: "#f3f3f3",
+                              }}
+                            >
+                              {/* 닉네임 + 버튼 라인 */}
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  marginBottom: 2,
+                                }}
+                              >
+                                <b style={{ fontWeight: 600,
+                                  color:
+                                    c.role === "admin"
+                                      ? "red"
+                                      : c.role === "trainer"
+                                      ? "green"
+                                      : "blue",
+                                 }}>
+                                  {c.nickname}({c.role === "trainer"
+                                                            ? "트레이너"
+                                                            : c.role === "admin"
+                                                            ? "관리자"
+                                                            : "회원"})
+                                </b>
+
+                                {/* 본인 댓글 또는 관리자만 수정/삭제 버튼 */}
+                                {isOwnerOrAdmin && !isEditing && (
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      gap: 4,
+                                      fontSize: 11,
+                                    }}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        startEditComment(c);
+                                      }}
+                                      style={{
+                                        padding: "2px 8px",
+                                        borderRadius: 999,
+                                        border: "none",
+                                        cursor: "pointer",
+                                        background: "#1976d2",
+                                        color: "#fff",
+                                        fontSize: 11,
+                                      }}
+                                    >
+                                      수정
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteComment(post.id, c.id);
+                                      }}
+                                      style={{
+                                        padding: "2px 8px",
+                                        borderRadius: 999,
+                                        border: "none",
+                                        cursor: "pointer",
+                                        background: "#e53935",
+                                        color: "#fff",
+                                        fontSize: 11,
+                                      }}
+                                    >
+                                      삭제
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* 내용 영역 */}
+                              {!isEditing ? (
+                                <div>{c.content}</div>
+                              ) : (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 4,
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  <input
+                                    value={editingCommentText}
+                                    onChange={(e) =>
+                                      setEditingCommentText(e.target.value)
+                                    }
+                                    style={{
+                                      flex: 1,
+                                      padding: "4px 6px",
+                                      borderRadius: 6,
+                                      border: "1px solid #ccc",
+                                      fontSize: 12,
+                                    }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      saveEditComment(post.id);
+                                    }}
+                                    style={{
+                                      padding: "3px 8px",
+                                      borderRadius: 999,
+                                      border: "none",
+                                      cursor: "pointer",
+                                      background: "#000",
+                                      color: "#fff",
+                                      fontSize: 11,
+                                    }}
+                                  >
+                                    저장
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      cancelEditComment();
+                                    }}
+                                    style={{
+                                      padding: "3px 8px",
+                                      borderRadius: 999,
+                                      border: "1px solid #ccc",
+                                      cursor: "pointer",
+                                      background: "#fff",
+                                      color: "#333",
+                                      fontSize: 11,
+                                    }}
+                                  >
+                                    취소
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+
 
                         {/* 댓글 입력 */}
                         {user && (
@@ -722,9 +1226,12 @@ export default function Board() {
                             }}
                           >
                             <input
-                              value={commentInput}
+                              value={commentInputs[post.id] || ""}
                               onChange={(e) =>
-                                setCommentInput(e.target.value)
+                                setCommentInputs((prev) => ({
+                                  ...prev,
+                                  [post.id]: e.target.value,
+                                }))
                               }
                               placeholder="댓글 작성..."
                               style={{
@@ -739,8 +1246,8 @@ export default function Board() {
                                 marginLeft: 6,
                                 padding: "5px 12px",
                                 borderRadius: 999,
-                                fontSize: 12,
-                                fontWeight: 500,
+                                fontSize: 15,
+                                fontWeight: 400,
                                 border: "none",
                                 cursor: "pointer",
                                 color: "#FFF",

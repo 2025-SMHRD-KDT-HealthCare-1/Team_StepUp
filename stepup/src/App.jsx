@@ -15,7 +15,8 @@ import Logs from "./pages/Logs.jsx";
 import Settings from "./pages/Settings.jsx";
 import Survey from "./pages/Survey.jsx";
 import Board from "./pages/Board.jsx";
-import Payment from "./pages/PayMent.jsx";   // 🔹 결제 페이지 추가
+import Payment from "./pages/PayMent.jsx";         // 결제 페이지
+import PaymentSuccess from "./pages/PayMentSuccess"; // 결제 완료 페이지
 
 import PageError from "./PageError.jsx";
 
@@ -155,7 +156,7 @@ export default function App() {
         }
       />
 
-      {/* 🔹 결제 페이지 라우트 추가 */}
+      {/* 결제 페이지 라우트 */}
       <Route
         path="/payment"
         element={
@@ -167,9 +168,20 @@ export default function App() {
         }
       />
 
+      {/* 결제 완료 페이지 라우트 */}
+      <Route
+        path="/payment-success"
+        element={
+          <PrivateRoute>
+            <PageError>
+              <PaymentSuccess />
+            </PageError>
+          </PrivateRoute>
+        }
+      />
+
       {/* 나머지 */}
       <Route path="*" element={<PageError />} />
     </Routes>
   );
 }
-

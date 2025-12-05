@@ -12,31 +12,51 @@ export default function Payment() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
 
-  // 🔹 프리미엄 플랜 정보 (UI용)
+  // 프리미엄 플랜 정보 (UI용)
   const PLAN = {
     label: "프리미엄",
     price: 4500,
     desc: "월 4,500원 · AI 코칭, 통계, 운동 영상 및 피드백 저장 기능 무제한 제공",
   };
 
-  // 🔹 Stripe Checkout 세션 만들기 → Stripe 결제 페이지로 이동
+  // Stripe Checkout 세션 만들기 → Stripe 결제 페이지로 이동
   const handlePay = async () => {
+    // 1. 로그인 체크
+    if (!user) {
+      alert("로그인 후 이용할 수 있습니다.");
+      return;
+    }
+
+    if (!user.email) {
+      alert("이메일 정보가 없는 계정입니다. 다시 로그인해주세요.");
+      return;
+    }
+
     try {
       setLoading(true);
 
       const res = await axios.post(
         `${API_BASE}/api/pay/create-checkout-session`,
         {
-          userId: user?.uid,
-          email: user?.email,
+          userId: user.uid,
+          email: user.email,
         }
       );
 
-      // Stripe에서 돌려준 결제 페이지 URL로 이동
+      // 정상일 때만 Stripe로 이동
       window.location.href = res.data.url;
     } catch (err) {
-      console.error("결제 세션 생성 오류:", err);
-      alert("결제 페이지로 이동하는 중 오류가 발생했습니다.");
+      console.error(
+        "결제 세션 생성 오류:",
+        err.response?.status,
+        err.response?.data || err.message || err
+      );
+
+      alert(
+        err.response?.data?.message ||
+          "결제 페이지로 이동하는 중 오류가 발생했습니다."
+      );
+    } finally {
       setLoading(false);
     }
   };
@@ -73,7 +93,7 @@ export default function Payment() {
             결제 버튼을 누르면 Stripe 결제 페이지로 이동합니다.
           </p>
 
-          {/* 🔹 프리미엄 플랜 박스 */}
+          {/* 프리미엄 플랜 박스 */}
           <div
             style={{
               marginBottom: "16px",
@@ -119,7 +139,7 @@ export default function Payment() {
             </div>
           </div>
 
-          {/* 🔹 버튼만 있는 심플한 영역 */}
+          {/* 버튼 영역 */}
           <button
             type="button"
             onClick={handlePay}
@@ -174,4 +194,3 @@ export default function Payment() {
     </div>
   );
 }
-
