@@ -29,11 +29,13 @@ const displayName =
     : user?.displayName || (user?.email ? user.email.split("@")[0] : "회원");
 
   const planLabel =
-    plan === "premium"
-      ? "유료 회원"
-      : plan === "admin"
-      ? "관리자"
-      : "무료 회원";
+  role === "trainer"
+    ? "트레이너"
+    : role === "admin"
+    ? "관리자"
+    : plan === "premium"
+    ? "유료 회원"
+    : "무료 회원";
 
   const handleLogout = async () => {
     try {
